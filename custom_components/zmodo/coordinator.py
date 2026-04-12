@@ -21,8 +21,6 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 
 from .api import ZmodoApi, ZmodoApiError, ZmodoAuthError
 from .const import (
-    ALERT_STORAGE_BASE,
-    ALERT_STORAGE_PATH,
     CONF_ALARM_ADDRESSES,
     CONF_APP_ADDRESSES,
     CONF_CLIENT_UUID,
@@ -38,14 +36,15 @@ _LOGGER = logging.getLogger(__name__)
 TOKEN_REFRESH_INTERVAL = 20 * 60  # 20 minutes — 4 min before the 24-min expiry
 
 
-def build_alert_media_url(path: str, token: str) -> str:
+def build_alert_media_url(base: str, path: str, token: str) -> str:
     """Build a fully-authenticated URL for an alert image or video.
 
-    The storage server requires the token and the relative path as params:
-      GET /storage/get_file?token=TOKEN&url=PATH
+    The alarm server serves media at /storage/get_file?token=TOKEN&url=PATH.
+    base should be the first alarm address from the coordinator (e.g.
+    https://11-alarm-mop.meshare.com) — the same host used to fetch alerts.
     """
     params = urlencode({"token": token, "url": path})
-    return f"{ALERT_STORAGE_BASE}{ALERT_STORAGE_PATH}?{params}"
+    return f"{base}/storage/get_file?{params}"
 
 
 class ZmodoCoordinator(DataUpdateCoordinator):
@@ -163,13 +162,17 @@ class ZmodoCoordinator(DataUpdateCoordinator):
     # Helpers
     # ------------------------------------------------------------------
 
+    def _alarm_base(self) -> str:
+        """Return the first available alarm server base URL."""
+        return self._alarm_addresses[0] if self._alarm_addresses else ""
+
     def alert_image_url(self, image_path: str) -> str:
         """Return a fully-authenticated URL for an alert thumbnail."""
-        return build_alert_media_url(image_path, self._token)
+        return build_alert_media_url(self._alarm_base(), image_path, self._token)
 
     def alert_video_url(self, video_path: str) -> str:
         """Return a fully-authenticated URL for an alert video clip."""
-        return build_alert_media_url(video_path, self._token)
+        return build_alert_media_url(self._alarm_base(), video_path, self._token)
 
     # ------------------------------------------------------------------
     # Data fetch
