@@ -257,18 +257,18 @@ class ZmodoApi:
             raise ZmodoApiError(f"Alert fetch failed: {data}")
         return data.get("data", [])
 
-    async def get_latest_alert_for_device(
+    async def get_alerts_for_device(
         self,
         alarm_address: str,
         token: str,
         physical_id: str,
         window_seconds: int = ALERT_WINDOW_SECONDS,
-    ) -> dict[str, Any] | None:
-        """Return the single most recent alert for one specific device.
+    ) -> list[dict[str, Any]]:
+        """Return all alerts for one device within the rolling window.
 
-        Passes physical_id as a query param (as the mobile app does), and
-        requests only count=1 so the server does the heavy lifting.
-        Returns the alert dict or None if there are no recent alerts.
+        Passes physical_id as a query param so the server pre-filters.
+        Returns a list ordered newest-first; an empty list means no alerts.
+        The caller can take [0] for the latest and len() for the 24h count.
         """
         now = int(time.time())
         url = f"{alarm_address}{ALARM_SEARCH_PATH}"
@@ -276,7 +276,7 @@ class ZmodoApi:
             "token": token,
             "max_time": now + 60,
             "min_time": now - window_seconds,
-            "count": 1,
+            "count": 999,
             "main_type": 1,
             "physical_id": physical_id,
         }
@@ -291,6 +291,5 @@ class ZmodoApi:
         if data.get("result") != "ok":
             raise ZmodoApiError(f"Alert fetch for {physical_id} failed: {data}")
 
-        items = data.get("data", [])
-        return items[0] if items else None
+        return data.get("data", [])
 

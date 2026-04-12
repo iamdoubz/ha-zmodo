@@ -199,45 +199,49 @@ class ZmodoCoordinator(DataUpdateCoordinator):
             f"All management addresses failed: {last_exc}"
         ) from last_exc
 
-    async def _fetch_latest_alert(self, physical_id: str) -> dict | None:
-        """Fetch the single most recent alert for one device.
+    async def _fetch_alerts_for_device(self, physical_id: str) -> list[dict]:
+        """Fetch the full 24h alert list for one device (newest-first).
 
-        Tries each alarm address in order; returns None on total failure
-        so a single bad camera never blocks the whole update.
+        Tries each alarm address in order; returns an empty list on total
+        failure so a single bad camera never blocks the whole update.
         """
         for addr in self._alarm_addresses:
             try:
-                return await self._api.get_latest_alert_for_device(
+                return await self._api.get_alerts_for_device(
                     addr, self._token, physical_id
                 )
             except ZmodoApiError as exc:
                 _LOGGER.debug(
-                    "Latest alert fetch for %s failed on %s: %s",
+                    "Alert fetch for %s failed on %s: %s",
                     physical_id, addr, exc,
                 )
-        return None
+        return []
 
     async def _async_update_data(self) -> dict[str, Any]:
-        """Poll devices and per-device latest alerts concurrently."""
+        """Poll devices and per-device alerts concurrently."""
         devices = await self._fetch_devices()
 
-        # Fetch the latest alert for every device in parallel
+        # Fetch all 24h alerts for every device in parallel
         physical_ids = [d["physical_id"] for d in devices]
         alert_results = await asyncio.gather(
-            *[self._fetch_latest_alert(pid) for pid in physical_ids],
+            *[self._fetch_alerts_for_device(pid) for pid in physical_ids],
             return_exceptions=True,
         )
 
-        # Build latest_alerts dict: physical_id -> alert dict (or None)
+        # Derive both latest alert and 24h count from the same list
         latest_alerts: dict[str, dict | None] = {}
+        alert_counts: dict[str, int] = {}
         for pid, result in zip(physical_ids, alert_results):
             if isinstance(result, Exception):
                 _LOGGER.debug("Alert fetch for %s raised: %s", pid, result)
-                latest_alerts[pid] = None
+                alerts_list: list[dict] = []
             else:
-                latest_alerts[pid] = result
+                alerts_list = result  # type: ignore[assignment]
+            latest_alerts[pid] = alerts_list[0] if alerts_list else None
+            alert_counts[pid] = len(alerts_list)
 
         return {
             "devices": {d["physical_id"]: d for d in devices},
             "latest_alerts": latest_alerts,
+            "alert_counts": alert_counts,
         }

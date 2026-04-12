@@ -1,7 +1,7 @@
 {
   "domain": "zmodo",
   "name": "Zmodo",
-  "version": "2026.4.1",
+  "version": "2026.4.2",
   "documentation": "https://github.com/iamdoubz/ha-zmodo",
   "codeowners": ["@iamdoubz"],
   "config_flow": true,

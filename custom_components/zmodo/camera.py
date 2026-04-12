@@ -63,10 +63,11 @@ async def async_setup_entry(
     """Set up Zmodo cameras — SD and HD entity for every device."""
     coordinator: ZmodoCoordinator = hass.data[DOMAIN][entry.entry_id]
 
-    entities: list[ZmodoCamera] = []
+    entities: list[Camera] = []
     for device in coordinator.data["devices"].values():
         for media_type in (STREAM_MEDIA_TYPE_SD, STREAM_MEDIA_TYPE_HD):
             entities.append(ZmodoCamera(coordinator, device, media_type))
+        entities.append(ZmodoAlertCamera(coordinator, device))
 
     async_add_entities(entities, update_before_add=True)
 
@@ -213,3 +214,108 @@ class ZmodoCamera(CoordinatorEntity, Camera):
                 err,
             )
         return None
+
+
+class ZmodoAlertCamera(CoordinatorEntity, Camera):
+    """Camera entity that replays the latest motion alert video clip.
+
+    stream_source() points to the MP4 alert clip (BT.709 / AAC) so it
+    can be played directly in the HA frontend via the stream component.
+    async_camera_image() serves the alert thumbnail JPEG as the static
+    preview, giving the dashboard card a meaningful still frame.
+
+    Both URLs are re-resolved from the coordinator on every call so they
+    always carry the current token after a proactive refresh.
+    """
+
+    _attr_has_entity_name = True
+    _attr_name = "Last Alert Clip"
+    _attr_icon = "mdi:motion-sensor"
+
+    def __init__(
+        self,
+        coordinator: ZmodoCoordinator,
+        device: dict[str, Any],
+    ) -> None:
+        CoordinatorEntity.__init__(self, coordinator)
+        Camera.__init__(self)
+        self._initial_device = device
+        self._physical_id: str = device["physical_id"]
+        self._attr_unique_id = f"zmodo_alert_clip_{self._physical_id}"
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        dev = self.coordinator.data["devices"].get(
+            self._physical_id, self._initial_device
+        )
+        return DeviceInfo(
+            identifiers={(DOMAIN, self._physical_id)},
+            name=dev.get("device_name", self._physical_id),
+            manufacturer="Zmodo",
+            model=dev.get("device_model"),
+            sw_version=dev.get("device_version"),
+        )
+
+    @property
+    def _latest_alert(self) -> dict | None:
+        return self.coordinator.data.get("latest_alerts", {}).get(self._physical_id)
+
+    @property
+    def supported_features(self) -> CameraEntityFeature:
+        return CameraEntityFeature.STREAM
+
+    @property
+    def available(self) -> bool:
+        """Available when the device is online and has at least one alert."""
+        dev = self.coordinator.data["devices"].get(self._physical_id, {})
+        return (
+            super().available
+            and dev.get("device_online", "0") == "1"
+            and self._latest_alert is not None
+        )
+
+    async def stream_source(self) -> str | None:
+        """Return the authenticated MP4 URL of the latest alert clip."""
+        alert = self._latest_alert
+        if not alert or not alert.get("video_url"):
+            return None
+        return self.coordinator.alert_video_url(alert["video_url"])
+
+    async def async_camera_image(
+        self, width: int | None = None, height: int | None = None
+    ) -> bytes | None:
+        """Return the alert thumbnail JPEG as the static preview frame."""
+        alert = self._latest_alert
+        if not alert or not alert.get("image_url"):
+            return None
+
+        url = self.coordinator.alert_image_url(alert["image_url"])
+        session = async_get_clientsession(self.hass)
+        try:
+            async with session.get(
+                url, timeout=aiohttp.ClientTimeout(total=10)
+            ) as resp:
+                if resp.status == 200:
+                    return await resp.read()
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.debug(
+                "Alert clip thumbnail fetch for %s failed: %s",
+                self._physical_id, err,
+            )
+        return None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        alert = self._latest_alert
+        if not alert:
+            return {}
+        attrs: dict[str, Any] = {
+            "alert_id": alert.get("id"),
+            "video_duration_seconds": alert.get("video_last"),
+            "alert_read": alert.get("if_read") == "1",
+        }
+        if alert.get("video_url"):
+            attrs["video_url"] = self.coordinator.alert_video_url(alert["video_url"])
+        if alert.get("image_url"):
+            attrs["image_url"] = self.coordinator.alert_image_url(alert["image_url"])
+        return attrs
