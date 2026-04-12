@@ -1,0 +1,22 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Zmodo / MeShare Login",
+        "description": "Enter your Zmodo or MeShare account credentials.",
+        "data": {
+          "email": "Email",
+          "password": "Password"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Failed to connect to Zmodo servers. Please check your internet connection and try again.",
+      "invalid_auth": "Invalid email or password. Please try again.",
+      "unknown": "An unexpected error occurred. Check the Home Assistant logs for details."
+    },
+    "abort": {
+      "already_configured": "This Zmodo account is already configured."
+    }
+  }
+}
