@@ -1,17 +1,16 @@
-"""Zmodo sensor platform - motion alert sensors."""
+"""Zmodo sensor platform — motion alert sensors."""
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
 from typing import Any
 
-from homeassistant.components.sensor import SensorEntity, SensorDeviceClass
+from homeassistant.components.sensor import SensorDeviceClass, SensorEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
-import homeassistant.util.dt as dt_util
-from datetime import datetime, timezone
 
 from .const import DOMAIN
 from .coordinator import ZmodoCoordinator
@@ -24,99 +23,95 @@ async def async_setup_entry(
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    """Set up Zmodo sensors."""
+    """Set up Zmodo sensors — last alert timestamp + 24h count per device."""
     coordinator: ZmodoCoordinator = hass.data[DOMAIN][entry.entry_id]
 
-    entities = []
+    entities: list[SensorEntity] = []
     for device in coordinator.data["devices"].values():
-        # One "last alert" sensor per camera
         entities.append(ZmodoLastAlertSensor(coordinator, device))
-        # One "alert count (24h)" sensor per camera
         entities.append(ZmodoAlertCountSensor(coordinator, device))
 
     async_add_entities(entities, update_before_add=True)
 
 
-def _alerts_for_device(
-    alerts: list[dict], physical_id: str
-) -> list[dict]:
-    """Filter alerts for a specific device."""
-    return [a for a in alerts if a.get("from_id") == physical_id]
-
-
 class ZmodoLastAlertSensor(CoordinatorEntity, SensorEntity):
-    """Sensor showing the timestamp of the most recent motion alert."""
+    """Sensor: timestamp of the most recent motion alert for one camera."""
 
     _attr_has_entity_name = True
     _attr_device_class = SensorDeviceClass.TIMESTAMP
+    _attr_name = "Last Alert"
 
     def __init__(self, coordinator: ZmodoCoordinator, device: dict[str, Any]) -> None:
-        """Initialise."""
         super().__init__(coordinator)
         self._physical_id: str = device["physical_id"]
-        self._device_name: str = device.get("device_name", self._physical_id)
         self._attr_unique_id = f"zmodo_last_alert_{self._physical_id}"
-        self._attr_name = "Last Alert"
 
     @property
     def device_info(self) -> DeviceInfo:
         return DeviceInfo(identifiers={(DOMAIN, self._physical_id)})
 
     @property
-    def native_value(self):  # type: ignore[override]
-        """Return the most recent alert timestamp."""
-        alerts = _alerts_for_device(
-            self.coordinator.data.get("alerts", []), self._physical_id
-        )
-        if not alerts:
+    def _latest_alert(self) -> dict | None:
+        return self.coordinator.data.get("latest_alerts", {}).get(self._physical_id)
+
+    @property
+    def native_value(self) -> datetime | None:
+        """Return the timestamp of the most recent alert."""
+        alert = self._latest_alert
+        if not alert:
             return None
-        # alerts are newest-first per the API
-        ts = alerts[0].get("timestamp") or alerts[0].get("alarm_time")
+        ts = alert.get("timestamp") or alert.get("alarm_time")
         if ts is None:
             return None
         return datetime.fromtimestamp(int(ts), tz=timezone.utc)
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
-        """Extra attributes from the most recent alert."""
-        alerts = _alerts_for_device(
-            self.coordinator.data.get("alerts", []), self._physical_id
-        )
-        if not alerts:
+        """Expose alert metadata including authenticated media URLs."""
+        alert = self._latest_alert
+        if not alert:
             return {}
-        latest = alerts[0]
-        return {
-            "alert_id": latest.get("id"),
-            "image_url": latest.get("image_url"),
-            "video_url": latest.get("video_url"),
-            "video_duration": latest.get("video_last"),
-            "if_read": latest.get("if_read"),
+
+        attrs: dict[str, Any] = {
+            "alert_id": alert.get("id"),
+            "alert_read": alert.get("if_read") == "1",
+            "video_duration_seconds": alert.get("video_last"),
         }
+
+        if alert.get("image_url"):
+            attrs["image_url"] = self.coordinator.alert_image_url(alert["image_url"])
+        if alert.get("video_url"):
+            attrs["video_url"] = self.coordinator.alert_video_url(alert["video_url"])
+
+        return attrs
 
 
 class ZmodoAlertCountSensor(CoordinatorEntity, SensorEntity):
-    """Sensor showing the number of motion alerts in the last 24 hours."""
+    """Sensor: number of motion alerts in the last 24 hours for one camera.
+
+    Note: because we now fetch only the *latest* alert per device (count=1),
+    this sensor is removed — it cannot be populated without the full list.
+    It is kept as a stub that always returns None so existing automations
+    referencing the entity don't break; it will show as 'unavailable'.
+
+    To restore full 24h counts, switch coordinator back to bulk alert fetch.
+    """
 
     _attr_has_entity_name = True
     _attr_native_unit_of_measurement = "alerts"
     _attr_icon = "mdi:bell-ring"
+    _attr_name = "Alert Count (24h)"
 
     def __init__(self, coordinator: ZmodoCoordinator, device: dict[str, Any]) -> None:
-        """Initialise."""
         super().__init__(coordinator)
         self._physical_id: str = device["physical_id"]
-        self._device_name: str = device.get("device_name", self._physical_id)
         self._attr_unique_id = f"zmodo_alert_count_{self._physical_id}"
-        self._attr_name = "Alert Count (24h)"
 
     @property
     def device_info(self) -> DeviceInfo:
         return DeviceInfo(identifiers={(DOMAIN, self._physical_id)})
 
     @property
-    def native_value(self) -> int:
-        """Return count of alerts."""
-        alerts = _alerts_for_device(
-            self.coordinator.data.get("alerts", []), self._physical_id
-        )
-        return len(alerts)
+    def native_value(self) -> int | None:
+        """Not available when using per-device count=1 alert fetching."""
+        return None

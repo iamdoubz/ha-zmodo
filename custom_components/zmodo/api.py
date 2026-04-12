@@ -256,3 +256,41 @@ class ZmodoApi:
         if data.get("result") != "ok":
             raise ZmodoApiError(f"Alert fetch failed: {data}")
         return data.get("data", [])
+
+    async def get_latest_alert_for_device(
+        self,
+        alarm_address: str,
+        token: str,
+        physical_id: str,
+        window_seconds: int = ALERT_WINDOW_SECONDS,
+    ) -> dict[str, Any] | None:
+        """Return the single most recent alert for one specific device.
+
+        Passes physical_id as a query param (as the mobile app does), and
+        requests only count=1 so the server does the heavy lifting.
+        Returns the alert dict or None if there are no recent alerts.
+        """
+        now = int(time.time())
+        url = f"{alarm_address}{ALARM_SEARCH_PATH}"
+        params = {
+            "token": token,
+            "max_time": now + 60,
+            "min_time": now - window_seconds,
+            "count": 1,
+            "main_type": 1,
+            "physical_id": physical_id,
+        }
+        async with self._session.get(
+            url,
+            params=params,
+            timeout=aiohttp.ClientTimeout(total=15),
+        ) as resp:
+            resp.raise_for_status()
+            data = await resp.json(content_type=None)
+
+        if data.get("result") != "ok":
+            raise ZmodoApiError(f"Alert fetch for {physical_id} failed: {data}")
+
+        items = data.get("data", [])
+        return items[0] if items else None
+

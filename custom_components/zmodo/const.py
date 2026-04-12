@@ -44,3 +44,8 @@ STREAM_BASE_URL = "https://flv.meshare.com/live"
 # media_type values
 STREAM_MEDIA_TYPE_SD = 1
 STREAM_MEDIA_TYPE_HD = 2
+
+# Alert media base URL — prepend this to image_url / video_url from the alert API
+# The storage server serves files at /storage/get_file?token=TOKEN&url=PATH
+ALERT_STORAGE_BASE = "https://storage.meshare.com"
+ALERT_STORAGE_PATH = "/storage/get_file"

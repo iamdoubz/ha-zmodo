@@ -7,9 +7,11 @@ is never stale when a data poll or stream URL is built.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import timedelta
 from typing import Any
+from urllib.parse import urlencode
 import time
 
 from homeassistant.config_entries import ConfigEntry
@@ -19,6 +21,8 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 
 from .api import ZmodoApi, ZmodoApiError, ZmodoAuthError
 from .const import (
+    ALERT_STORAGE_BASE,
+    ALERT_STORAGE_PATH,
     CONF_ALARM_ADDRESSES,
     CONF_APP_ADDRESSES,
     CONF_CLIENT_UUID,
@@ -31,12 +35,21 @@ from .const import (
 
 _LOGGER = logging.getLogger(__name__)
 
-# Refresh 4 minutes before the 24-minute expiry window to give plenty of headroom
-TOKEN_REFRESH_INTERVAL = 20 * 60  # 20 minutes in seconds
+TOKEN_REFRESH_INTERVAL = 20 * 60  # 20 minutes — 4 min before the 24-min expiry
+
+
+def build_alert_media_url(path: str, token: str) -> str:
+    """Build a fully-authenticated URL for an alert image or video.
+
+    The storage server requires the token and the relative path as params:
+      GET /storage/get_file?token=TOKEN&url=PATH
+    """
+    params = urlencode({"token": token, "url": path})
+    return f"{ALERT_STORAGE_BASE}{ALERT_STORAGE_PATH}?{params}"
 
 
 class ZmodoCoordinator(DataUpdateCoordinator):
-    """Fetch devices and alerts, refreshing the token proactively."""
+    """Fetch devices and per-device latest alerts, refreshing the token proactively."""
 
     def __init__(
         self,
@@ -53,17 +66,12 @@ class ZmodoCoordinator(DataUpdateCoordinator):
         self._api = api
         self._entry = entry
 
-        # Working copies updated whenever a refresh succeeds
         self._token: str = entry.data[CONF_TOKEN]
         self._login_cert: str = entry.data.get(CONF_LOGIN_CERT, "")
         self._client_uuid: str = entry.data.get(CONF_CLIENT_UUID, "")
         self._mng_addresses: list[str] = entry.data.get(CONF_MNG_ADDRESSES, [])
         self._alarm_addresses: list[str] = entry.data.get(CONF_ALARM_ADDRESSES, [])
-
-        # Track when the token was last refreshed
         self._token_refreshed_at: float = time.monotonic()
-
-        # Will hold the cancel callback for the scheduled refresh
         self._refresh_unsub = None
 
     # ------------------------------------------------------------------
@@ -71,11 +79,7 @@ class ZmodoCoordinator(DataUpdateCoordinator):
     # ------------------------------------------------------------------
 
     async def async_setup(self) -> None:
-        """Register the proactive token refresh timer.
-
-        Call this once after the coordinator is created and the first
-        refresh has succeeded.
-        """
+        """Register the proactive token refresh timer."""
         self._refresh_unsub = async_track_time_interval(
             self.hass,
             self._handle_scheduled_refresh,
@@ -93,7 +97,6 @@ class ZmodoCoordinator(DataUpdateCoordinator):
             self._refresh_unsub = None
 
     async def _handle_scheduled_refresh(self, _now=None) -> None:
-        """Callback fired by async_track_time_interval every 20 minutes."""
         _LOGGER.debug("Proactive Zmodo token refresh triggered")
         success = await self._refresh_token()
         if not success:
@@ -107,15 +110,11 @@ class ZmodoCoordinator(DataUpdateCoordinator):
 
     @property
     def token(self) -> str:
-        """Return the current (possibly freshly refreshed) session token."""
+        """Return the current session token."""
         return self._token
 
     async def _refresh_token(self) -> bool:
-        """Silently refresh the session token using the stored login_cert.
-
-        Returns True on success and persists the new token to the config entry.
-        Returns False if the cert is missing, invalid, or the call fails.
-        """
+        """Silently refresh the session token using the stored login_cert."""
         if not self._login_cert or not self._client_uuid:
             _LOGGER.debug("No login_cert stored; cannot refresh token silently")
             return False
@@ -140,14 +139,12 @@ class ZmodoCoordinator(DataUpdateCoordinator):
         new_alarm = host_list.get("alarm_address", self._alarm_addresses)
         new_app = host_list.get("app_address", self._entry.data.get(CONF_APP_ADDRESSES, []))
 
-        # Update working state
         self._token = new_token
         self._login_cert = new_cert
         self._mng_addresses = new_mng
         self._alarm_addresses = new_alarm
         self._token_refreshed_at = time.monotonic()
 
-        # Persist to config entry so the token survives an HA restart
         self.hass.config_entries.async_update_entry(
             self._entry,
             data={
@@ -159,9 +156,20 @@ class ZmodoCoordinator(DataUpdateCoordinator):
                 CONF_APP_ADDRESSES: new_app,
             },
         )
-
         _LOGGER.debug("Zmodo token refreshed and persisted to config entry")
         return True
+
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+
+    def alert_image_url(self, image_path: str) -> str:
+        """Return a fully-authenticated URL for an alert thumbnail."""
+        return build_alert_media_url(image_path, self._token)
+
+    def alert_video_url(self, video_path: str) -> str:
+        """Return a fully-authenticated URL for an alert video clip."""
+        return build_alert_media_url(video_path, self._token)
 
     # ------------------------------------------------------------------
     # Data fetch
@@ -171,7 +179,7 @@ class ZmodoCoordinator(DataUpdateCoordinator):
         """Try each mng address; attempt one reactive refresh on auth failure."""
         last_exc: Exception | None = None
 
-        for attempt in range(2):  # attempt 0 = normal; attempt 1 = post-refresh
+        for attempt in range(2):
             for addr in self._mng_addresses:
                 try:
                     return await self._api.get_devices(addr, self._token)
@@ -191,19 +199,45 @@ class ZmodoCoordinator(DataUpdateCoordinator):
             f"All management addresses failed: {last_exc}"
         ) from last_exc
 
-    async def _async_update_data(self) -> dict[str, Any]:
-        """Poll devices and alerts."""
-        devices = await self._fetch_devices()
+    async def _fetch_latest_alert(self, physical_id: str) -> dict | None:
+        """Fetch the single most recent alert for one device.
 
-        alerts: list[dict] = []
+        Tries each alarm address in order; returns None on total failure
+        so a single bad camera never blocks the whole update.
+        """
         for addr in self._alarm_addresses:
             try:
-                alerts = await self._api.get_alerts(addr, self._token)
-                break
+                return await self._api.get_latest_alert_for_device(
+                    addr, self._token, physical_id
+                )
             except ZmodoApiError as exc:
-                _LOGGER.debug("Alert fetch failed for %s: %s", addr, exc)
+                _LOGGER.debug(
+                    "Latest alert fetch for %s failed on %s: %s",
+                    physical_id, addr, exc,
+                )
+        return None
+
+    async def _async_update_data(self) -> dict[str, Any]:
+        """Poll devices and per-device latest alerts concurrently."""
+        devices = await self._fetch_devices()
+
+        # Fetch the latest alert for every device in parallel
+        physical_ids = [d["physical_id"] for d in devices]
+        alert_results = await asyncio.gather(
+            *[self._fetch_latest_alert(pid) for pid in physical_ids],
+            return_exceptions=True,
+        )
+
+        # Build latest_alerts dict: physical_id -> alert dict (or None)
+        latest_alerts: dict[str, dict | None] = {}
+        for pid, result in zip(physical_ids, alert_results):
+            if isinstance(result, Exception):
+                _LOGGER.debug("Alert fetch for %s raised: %s", pid, result)
+                latest_alerts[pid] = None
+            else:
+                latest_alerts[pid] = result
 
         return {
             "devices": {d["physical_id"]: d for d in devices},
-            "alerts": alerts,
+            "latest_alerts": latest_alerts,
         }
