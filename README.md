@@ -1,3 +1,6 @@
+| [![zmodo-social.png](img/zmodo-social.png)](img/zmodo-social.png) |
+| :---: |
+
 # Zmodo Home Assistant Integration
 
 [![HACS Custom][hacs-shield]][hacs-url]
@@ -56,6 +59,10 @@ For each camera discovered on your account, the following entities are created:
 | `camera.<name>_hd` | Camera | High definition (1080p) live stream |
 | `sensor.<name>_last_alert` | Timestamp | Time of the most recent motion event |
 | `sensor.<name>_alert_count_24h` | Number | Motion alert count in the last 24 hours |
+| `image.<name>_last_alert_image` | Image | Last motion clip image thumbnail |
+| `camera.<name>_last_alert_clip` | Camera | Last motion clip video (480p) |
+| `sensor.<name>_last_alert_image_url` | String | Last motion clip image URL |
+| `sensor.<name>_last_alert_video_url` | String | Last motion clip video URL |
 
 ---
 
