@@ -5,7 +5,8 @@
   "config_flow": true,
   "documentation": "https://github.com/iamdoubz/ha-zmodo",
   "iot_class": "cloud_polling",
+  "issue_tracker": "https://github.com/iamdoubz/ha-zmodo/issues",
   "loggers": ["custom_components.zmodo"],
   "requirements": [],
-  "version": "2026.4.5"
+  "version": "2026.4.6"
 }
