@@ -74,6 +74,8 @@ class ZmodoCoordinator(DataUpdateCoordinator):
         self._app_addresses: list[str] = entry.data.get(CONF_APP_ADDRESSES, [])
         self._token_refreshed_at: float = time.monotonic()
         self._refresh_unsub = None
+        # Notification state tracked optimistically — not polled from the API
+        self._notifications_on: bool = True
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -182,12 +184,18 @@ class ZmodoCoordinator(DataUpdateCoordinator):
         return build_alert_media_url(self._alarm_base(), video_path, self._token)
 
     async def async_set_notifications(self, enable: bool) -> None:
-        """Toggle account-level push notifications on or off."""
+        """Toggle account-level push notifications on or off.
+
+        State is tracked optimistically: we update _notifications_on before
+        the API call so the switch flips immediately in the UI, then persist
+        it so future polls carry the correct value without querying the API.
+        """
+        self._notifications_on = enable
+        # Notify listeners immediately so the switch reflects the new state
+        self.async_update_listeners()
         await self._api.set_notification_mode(
             self._app_base(), self._token, enable
         )
-        # Immediately re-fetch so the switch state reflects the change
-        await self.async_request_refresh()
 
     # ------------------------------------------------------------------
     # Data fetch
@@ -258,18 +266,10 @@ class ZmodoCoordinator(DataUpdateCoordinator):
             latest_alerts[pid] = alerts_list[0] if alerts_list else None
             alert_counts[pid] = len(alerts_list)
 
-        # Fetch current notification mode (best-effort; default True on failure)
-        notifications_on = True
-        try:
-            notifications_on = await self._api.get_notification_mode(
-                self._app_base(), self._token
-            )
-        except Exception as exc:  # noqa: BLE001
-            _LOGGER.debug("Notification mode fetch failed: %s", exc)
-
         return {
             "devices": {d["physical_id"]: d for d in devices},
             "latest_alerts": latest_alerts,
             "alert_counts": alert_counts,
-            "notifications_on": notifications_on,
+            # Carried from in-memory state — updated only when the switch is toggled
+            "notifications_on": self._notifications_on,
         }
