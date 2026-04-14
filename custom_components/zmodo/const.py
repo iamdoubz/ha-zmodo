@@ -20,8 +20,8 @@ NOTIFICATION_GET_PATH = "/mode/user_mode_get"
 NOTIFICATION_SET_PATH = "/mode/user_config_set"
 
 # Notification mode values
-NOTIFICATION_MODE_ON = "1"
-NOTIFICATION_MODE_OFF = "2"
+NOTIFICATION_MODE_ON = "0"
+NOTIFICATION_MODE_OFF = "1"
 
 # Login form constants (app-style, mirroring iOS app)
 LOGIN_CID = "0"

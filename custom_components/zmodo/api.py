@@ -300,7 +300,7 @@ class ZmodoApi:
 
         Queries /mode/user_mode_get and inspects the is_default flag on each
         mode entry.  The mode whose is_default == "1" is the active one.
-        mode_type "0" = ON, mode_type "1" = OFF.
+        mode_type "0" = ON (notifications enabled), mode_type "1" = OFF.
         """
         url = f"{app_address}{NOTIFICATION_GET_PATH}"
         data = await self._post(url, {"token": token}, token=token)
@@ -321,10 +321,10 @@ class ZmodoApi:
     ) -> None:
         """Turn notifications ON (enable=True) or OFF (enable=False).
 
-        POSTs to /mode/user_config_set with mode=1 for ON, mode=2 for OFF.
+        POSTs to /mode/user_config_set with mode=0 for ON, mode=1 for OFF.
         """
         url = f"{app_address}{NOTIFICATION_SET_PATH}"
-        mode = "1" if enable else "2"
+        mode = "0" if enable else "1"
         data = await self._post(url, {"mode": mode, "token": token}, token=token)
 
         if data.get("result") != "ok":
