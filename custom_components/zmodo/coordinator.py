@@ -21,6 +21,7 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 
 from .api import ZmodoApi, ZmodoApiError, ZmodoAuthError
 from .const import (
+    APP_MOP_HOSTS,
     CONF_ALARM_ADDRESSES,
     CONF_APP_ADDRESSES,
     CONF_CLIENT_UUID,
@@ -70,6 +71,7 @@ class ZmodoCoordinator(DataUpdateCoordinator):
         self._client_uuid: str = entry.data.get(CONF_CLIENT_UUID, "")
         self._mng_addresses: list[str] = entry.data.get(CONF_MNG_ADDRESSES, [])
         self._alarm_addresses: list[str] = entry.data.get(CONF_ALARM_ADDRESSES, [])
+        self._app_addresses: list[str] = entry.data.get(CONF_APP_ADDRESSES, [])
         self._token_refreshed_at: float = time.monotonic()
         self._refresh_unsub = None
 
@@ -142,6 +144,7 @@ class ZmodoCoordinator(DataUpdateCoordinator):
         self._login_cert = new_cert
         self._mng_addresses = new_mng
         self._alarm_addresses = new_alarm
+        self._app_addresses = new_app
         self._token_refreshed_at = time.monotonic()
 
         self.hass.config_entries.async_update_entry(
@@ -166,6 +169,10 @@ class ZmodoCoordinator(DataUpdateCoordinator):
         """Return the first available alarm server base URL."""
         return self._alarm_addresses[0] if self._alarm_addresses else ""
 
+    def _app_base(self) -> str:
+        """Return the first available app server base URL."""
+        return self._app_addresses[0] if self._app_addresses else APP_MOP_HOSTS[0]
+
     def alert_image_url(self, image_path: str) -> str:
         """Return a fully-authenticated URL for an alert thumbnail."""
         return build_alert_media_url(self._alarm_base(), image_path, self._token)
@@ -173,6 +180,14 @@ class ZmodoCoordinator(DataUpdateCoordinator):
     def alert_video_url(self, video_path: str) -> str:
         """Return a fully-authenticated URL for an alert video clip."""
         return build_alert_media_url(self._alarm_base(), video_path, self._token)
+
+    async def async_set_notifications(self, enable: bool) -> None:
+        """Toggle account-level push notifications on or off."""
+        await self._api.set_notification_mode(
+            self._app_base(), self._token, enable
+        )
+        # Immediately re-fetch so the switch state reflects the change
+        await self.async_request_refresh()
 
     # ------------------------------------------------------------------
     # Data fetch
@@ -243,8 +258,18 @@ class ZmodoCoordinator(DataUpdateCoordinator):
             latest_alerts[pid] = alerts_list[0] if alerts_list else None
             alert_counts[pid] = len(alerts_list)
 
+        # Fetch current notification mode (best-effort; default True on failure)
+        notifications_on = True
+        try:
+            notifications_on = await self._api.get_notification_mode(
+                self._app_base(), self._token
+            )
+        except Exception as exc:  # noqa: BLE001
+            _LOGGER.debug("Notification mode fetch failed: %s", exc)
+
         return {
             "devices": {d["physical_id"]: d for d in devices},
             "latest_alerts": latest_alerts,
             "alert_counts": alert_counts,
+            "notifications_on": notifications_on,
         }

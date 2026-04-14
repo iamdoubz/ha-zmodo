@@ -23,6 +23,8 @@ from .const import (
     LOGIN_CLIENT_VERSION,
     LOGIN_LANGUAGE,
     LOGIN_PLATFORM,
+    NOTIFICATION_GET_PATH,
+    NOTIFICATION_SET_PATH,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -292,4 +294,41 @@ class ZmodoApi:
             raise ZmodoApiError(f"Alert fetch for {physical_id} failed: {data}")
 
         return data.get("data", [])
+
+    async def get_notification_mode(self, app_address: str, token: str) -> bool:
+        """Return True if notifications are currently ON (mode=1).
+
+        Queries /mode/user_mode_get and inspects the is_default flag on each
+        mode entry.  The mode whose is_default == "1" is the active one.
+        mode_type "0" = ON, mode_type "1" = OFF.
+        """
+        url = f"{app_address}{NOTIFICATION_GET_PATH}"
+        data = await self._post(url, {"token": token}, token=token)
+
+        if data.get("result") != "ok":
+            raise ZmodoApiError(f"get_notification_mode failed: {data}")
+
+        for entry in data.get("data", []):
+            if entry.get("is_default") == "1":
+                # mode_type "0" = ON, "1" = OFF
+                return entry.get("mode_type") == "0"
+
+        # Default to ON if we can't determine the state
+        return True
+
+    async def set_notification_mode(
+        self, app_address: str, token: str, enable: bool
+    ) -> None:
+        """Turn notifications ON (enable=True) or OFF (enable=False).
+
+        POSTs to /mode/user_config_set with mode=1 for ON, mode=2 for OFF.
+        """
+        url = f"{app_address}{NOTIFICATION_SET_PATH}"
+        mode = "1" if enable else "2"
+        data = await self._post(url, {"mode": mode, "token": token}, token=token)
+
+        if data.get("result") != "ok":
+            raise ZmodoApiError(
+                f"set_notification_mode({'ON' if enable else 'OFF'}) failed: {data}"
+            )
 

@@ -15,6 +15,14 @@ APP_MOP_HOSTS = [
 DEVICE_LIST_PATH = "/device/device_list"
 ALARM_SEARCH_PATH = "/message/search"
 
+# Notification mode endpoints (on app-mop hosts)
+NOTIFICATION_GET_PATH = "/mode/user_mode_get"
+NOTIFICATION_SET_PATH = "/mode/user_config_set"
+
+# Notification mode values
+NOTIFICATION_MODE_ON = "1"
+NOTIFICATION_MODE_OFF = "2"
+
 # Login form constants (app-style, mirroring iOS app)
 LOGIN_CID = "0"
 LOGIN_PLATFORM = "2"
@@ -33,7 +41,7 @@ CONF_ALARM_ADDRESSES = "alarm_addresses"
 CONF_MNG_ADDRESSES = "mng_addresses"
 
 # Coordinator update interval (seconds)
-UPDATE_INTERVAL = 5
+UPDATE_INTERVAL = 60
 
 # Alert fetch window (seconds): 24 hours
 ALERT_WINDOW_SECONDS = 86400
