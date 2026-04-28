@@ -7,7 +7,8 @@ from typing import Any
 from homeassistant.components.switch import SwitchEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.entity import DeviceInfo, EntityCategory
+from homeassistant.const import EntityCategory
+from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
@@ -24,7 +25,10 @@ async def async_setup_entry(
 ) -> None:
     """Set up the Zmodo notification switch."""
     coordinator: ZmodoCoordinator = hass.data[DOMAIN][entry.entry_id]
-    async_add_entities([ZmodoNotificationSwitch(coordinator, entry)], update_before_add=True)
+    entities: list = [ZmodoNotificationSwitch(coordinator, entry)]
+    for device in coordinator.data["devices"].values():
+        entities.append(ZmodoMicrophoneSwitch(coordinator, device))
+    async_add_entities(entities, update_before_add=True)
 
 
 class ZmodoNotificationSwitch(CoordinatorEntity, SwitchEntity):
@@ -89,3 +93,58 @@ class ZmodoNotificationSwitch(CoordinatorEntity, SwitchEntity):
     async def async_turn_off(self, **kwargs: Any) -> None:
         """Disable push notifications."""
         await self.coordinator.async_set_notifications(False)
+
+
+class ZmodoMicrophoneSwitch(CoordinatorEntity, SwitchEntity):
+    """Switch to enable or disable the microphone on a Zmodo camera.
+
+    The device list returns a "mute" field for each device:
+      mute = "0" → microphone is active (switch ON)
+      mute = "1" → microphone is muted  (switch OFF)
+
+    The API uses the same inverted convention; the inversion is handled
+    in coordinator.async_set_device_mute() and api.set_device_mute() so
+    this entity works with plain on/off semantics.
+    """
+
+    _attr_has_entity_name = True
+    _attr_name = "Microphone"
+    _attr_icon = "mdi:microphone"
+    _attr_entity_category = EntityCategory.CONFIG
+
+    def __init__(
+        self,
+        coordinator: ZmodoCoordinator,
+        device: dict[str, Any],
+    ) -> None:
+        super().__init__(coordinator)
+        self._physical_id: str = device["physical_id"]
+        self._attr_unique_id = f"zmodo_microphone_{self._physical_id}"
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        return DeviceInfo(identifiers={(DOMAIN, self._physical_id)})
+
+    @property
+    def _current_device(self) -> dict[str, Any]:
+        return self.coordinator.data["devices"].get(self._physical_id, {})
+
+    @property
+    def is_on(self) -> bool:
+        """Return True when the microphone is active (mute field = "0")."""
+        return self._current_device.get("mute", "0") == "0"
+
+    @property
+    def available(self) -> bool:
+        return (
+            super().available
+            and self._current_device.get("device_online", "0") == "1"
+        )
+
+    async def async_turn_on(self, **kwargs: Any) -> None:
+        """Activate the microphone."""
+        await self.coordinator.async_set_device_mute(self._physical_id, mic_active=True)
+
+    async def async_turn_off(self, **kwargs: Any) -> None:
+        """Mute the microphone."""
+        await self.coordinator.async_set_device_mute(self._physical_id, mic_active=False)

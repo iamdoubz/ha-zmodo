@@ -215,6 +215,29 @@ class ZmodoCoordinator(DataUpdateCoordinator):
         """Return a fully-authenticated URL for a device product image."""
         return build_device_pic_url(self._alarm_base(), pic_path, self._token, physical_id)
 
+    async def async_set_device_mute(self, physical_id: str, mic_active: bool) -> None:
+        """Set microphone state for a device and update coordinator data optimistically.
+
+        mic_active=True  → microphone on  (mute field = "0" in device data)
+        mic_active=False → microphone off (mute field = "1" in device data)
+        """
+        devices = self.data.get("devices", {})
+        if physical_id in devices:
+            # mute field in device data: "0"=mic on, "1"=mic off — inverted from bool
+            devices[physical_id]["mute"] = "0" if mic_active else "1"
+        self.async_update_listeners()
+
+        device_type = devices.get(physical_id, {}).get("device_type", "22")
+        for addr in self._mng_addresses:
+            try:
+                await self._api.set_device_mute(
+                    addr, self._token, physical_id, device_type, mic_active
+                )
+                return
+            except ZmodoApiError as exc:
+                _LOGGER.debug("set_device_mute failed for %s on %s: %s", physical_id, addr, exc)
+        _LOGGER.warning("set_device_mute failed on all management addresses for %s", physical_id)
+
     async def async_set_device_frame_rate(self, physical_id: str, frame_rate: int) -> None:
         """Set the frame rate for a device and update coordinator data optimistically."""
         devices = self.data.get("devices", {})

@@ -15,6 +15,7 @@ APP_MOP_HOSTS = [
 DEVICE_LIST_PATH = "/device/device_list"
 DEVICE_STORAGE_LIST_PATH = "/device/storage_list"
 DEVICE_MODIFY_PATH = "/device/device_modify"
+DEVICE_MUTE_PATH = "/device/set_mute"
 ALARM_SEARCH_PATH = "/message/search"
 
 # Notification mode endpoints (on app-mop hosts)
