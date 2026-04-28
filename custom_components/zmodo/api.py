@@ -391,23 +391,23 @@ class ZmodoApi:
         token: str,
         physical_id: str,
         device_type: str,
-        mute: bool,
+        mic_active: bool,
     ) -> None:
         """Mute or unmute the microphone on a device.
 
-        mute=True  → send mute=0 (microphone OFF / muted)
-        mute=False → send mute=1 (microphone ON / active)
+        mic_active=True  → microphone ON  → send mute=1 (device_list returns mute="1")
+        mic_active=False → microphone OFF → send mute=0 (device_list returns mute="0")
 
-        Note: the API uses inverted logic — mute=0 disables the mic,
-        mute=1 enables it.  The caller passes a plain bool representing
-        whether the mic should be active; inversion is handled here.
+        The device_list "mute" field uses: 1 = mic active, 0 = mic muted.
+        The set_mute endpoint uses the same convention: mute=1 activates mic,
+        mute=0 mutes it.
         """
         url = f"{mng_address}{DEVICE_MUTE_PATH}"
         data = await self._post(
             url,
             {
                 "dev_type": device_type,
-                "mute": "0" if mute else "1",
+                "mute": "1" if mic_active else "0",
                 "physical_id": physical_id,
                 "token": token,
             },
