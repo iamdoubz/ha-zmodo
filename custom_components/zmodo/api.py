@@ -18,6 +18,7 @@ from .const import (
     APP_MOP_HOSTS,
     DEVICE_LIST_PATH,
     DEVICE_MODIFY_PATH,
+    DEVICE_MUTE_PATH,
     DEVICE_STORAGE_LIST_PATH,
     LOGIN_APP_VERSION,
     LOGIN_CID,
@@ -383,6 +384,38 @@ class ZmodoApi:
         )
         if data.get("result") != "ok":
             raise ZmodoApiError(f"set_device_frame_rate failed: {data}")
+
+    async def set_device_mute(
+        self,
+        mng_address: str,
+        token: str,
+        physical_id: str,
+        device_type: str,
+        mute: bool,
+    ) -> None:
+        """Mute or unmute the microphone on a device.
+
+        mute=True  → send mute=0 (microphone OFF / muted)
+        mute=False → send mute=1 (microphone ON / active)
+
+        Note: the API uses inverted logic — mute=0 disables the mic,
+        mute=1 enables it.  The caller passes a plain bool representing
+        whether the mic should be active; inversion is handled here.
+        """
+        url = f"{mng_address}{DEVICE_MUTE_PATH}"
+        data = await self._post(
+            url,
+            {
+                "dev_type": device_type,
+                "mute": "0" if mute else "1",
+                "physical_id": physical_id,
+                "token": token,
+            },
+            token=token,
+            timeout=10,
+        )
+        if data.get("result") != "ok":
+            raise ZmodoApiError(f"set_device_mute failed: {data}")
 
     async def get_storage_list(self, mng_address: str, token: str) -> list[dict[str, Any]]:
         """Fetch the storage list, which contains pic_url for each device.
