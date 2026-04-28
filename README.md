@@ -21,7 +21,7 @@ A Home Assistant custom integration for **Zmodo / MeShare** cloud cameras.
 - 🔊 **Volume slider** — increase and decrease device volume levels
 - 🎙️ **Microphone switch** — turn your device's microphone on or off
 - 🌙👁️ **Nightvision** — configure on/off/auto with sensitivity settings low/normal/high
-- 🔄 **Automatic token refresh** — silently re-authenticates every 20 minutes using the same mechanism as the mobile app (no captcha, no re-entering credentials)
+- 🔃 **Automatic token refresh** — silently re-authenticates every 20 minutes using the same mechanism as the mobile app (no captcha, no re-entering credentials)
 - 🔌 **Config flow** — set up from the HA UI with just your email and password
 
 ---
