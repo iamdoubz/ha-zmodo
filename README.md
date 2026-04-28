@@ -13,7 +13,7 @@ A Home Assistant custom integration for **Zmodo / MeShare** cloud cameras.
 
 ---
 
-## ⚡ Features
+## ⚡ Features ⚡
 
 - 📷 **Camera entities** — SD and HD stream for each device
 - 🎦 **Camera frame rate** — choose from low to high frame rate to control video quality
@@ -26,9 +26,9 @@ A Home Assistant custom integration for **Zmodo / MeShare** cloud cameras.
 
 ---
 
-## 📖 Installation
+## 📖 Installation 🗺️
 
-### 🔄 Via HACS (recommended)
+### 🔄 Via HACS (recommended) 🔄
 
 1. In Home Assistant, go to **HACS → Integrations**.
 2. Click the three-dot menu (⋮) and choose **Custom repositories**.
@@ -36,7 +36,7 @@ A Home Assistant custom integration for **Zmodo / MeShare** cloud cameras.
 4. Find **Zmodo** in the HACS store and click **Download**.
 5. Restart Home Assistant.
 
-### ⬇️ Manual
+### ⬇️ Manual ⬇️
 
 1. Download the [latest release](https://github.com/iamdoubz/ha-zmodo/releases/latest).
 2. Copy the `custom_components/zmodo` folder into your HA `config/custom_components/` directory.
@@ -44,7 +44,7 @@ A Home Assistant custom integration for **Zmodo / MeShare** cloud cameras.
 
 ---
 
-## ⚙️ Setup
+## ⚙️ Setup ⚙️
 
 1. Go to **Settings → Devices & Services → Add Integration**.
 2. Search for **Zmodo**.
@@ -53,7 +53,7 @@ A Home Assistant custom integration for **Zmodo / MeShare** cloud cameras.
 
 ---
 
-## 💡 Entities
+## 💡 Entities 💡
 
 For each camera discovered on your account, the following entities are created:
 
@@ -77,7 +77,7 @@ For each camera discovered on your account, the following entities are created:
 
 ---
 
-## 🤷 Known limitations
+## 🗑️ Known limitations 🤦
 
 - **Cloud-only**: All data passes through Zmodo/MeShare servers. No local network access to cameras is used.
 - **PTZ**: Pan/tilt commands travel over a certificate-pinned binary protocol on Zmodo's VDR servers and cannot be controlled via this integration.
@@ -85,7 +85,7 @@ For each camera discovered on your account, the following entities are created:
 
 ---
 
-## ⁉️ Troubleshooting
+## ⁉️ Troubleshooting 💥
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
@@ -95,7 +95,7 @@ For each camera discovered on your account, the following entities are created:
 
 ---
 
-## 🥼 Contributing
+## 🧠 Contributing 🥼
 
 Pull requests welcome! Please open an issue first to discuss major changes.
 
