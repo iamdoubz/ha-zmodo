@@ -17,7 +17,7 @@ DEVICE_STORAGE_LIST_PATH = "/device/storage_list"
 ALARM_SEARCH_PATH = "/message/search"
 
 # Notification mode endpoints (on app-mop hosts)
-NOTIFICATION_GET_PATH = "/mode/user_mode_get"
+NOTIFICATION_GET_PATH = "/mode/user_config_get"
 NOTIFICATION_SET_PATH = "/mode/user_config_set"
 
 # Notification mode values

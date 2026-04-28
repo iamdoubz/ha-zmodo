@@ -102,6 +102,7 @@ class ZmodoCoordinator(DataUpdateCoordinator):
         self._token_refreshed_at: float = time.monotonic()
         self._refresh_unsub = None
         # Notification state tracked optimistically — not polled from the API
+        # Real state fetched from server on first poll; True until then
         self._notifications_on: bool = True
 
     # ------------------------------------------------------------------
@@ -292,18 +293,33 @@ class ZmodoCoordinator(DataUpdateCoordinator):
                 _LOGGER.debug("Storage list failed for %s: %s", addr, exc)
         return {}
 
+    async def _fetch_notification_mode(self) -> bool:
+        """Fetch the current notification mode from the server.
+
+        Returns True (ON) or False (OFF). Falls back to the last known
+        in-memory value on failure so a transient error doesn't flip the switch.
+        """
+        for addr in self._app_addresses or APP_MOP_HOSTS:
+            try:
+                return await self._api.get_notification_mode(addr, self._token)
+            except ZmodoApiError as exc:
+                _LOGGER.debug("Notification mode fetch failed for %s: %s", addr, exc)
+        _LOGGER.debug("All notification mode fetches failed; keeping last known state")
+        return self._notifications_on
+
     async def _async_update_data(self) -> dict[str, Any]:
         """Poll devices, alerts, and device images concurrently."""
         devices = await self._fetch_devices()
 
         # Fetch alerts and device images concurrently
         physical_ids = [d["physical_id"] for d in devices]
-        alert_results, device_pics = await asyncio.gather(
+        alert_results, device_pics, notifications_on = await asyncio.gather(
             asyncio.gather(
                 *[self._fetch_alerts_for_device(pid) for pid in physical_ids],
                 return_exceptions=True,
             ),
             self._fetch_storage_list(),
+            self._fetch_notification_mode(),
         )
 
         # Derive both latest alert and 24h count from the same list
@@ -318,11 +334,14 @@ class ZmodoCoordinator(DataUpdateCoordinator):
             latest_alerts[pid] = alerts_list[0] if alerts_list else None
             alert_counts[pid] = len(alerts_list)
 
+        # Persist fetched state so async_set_notifications optimistic update
+        # is overwritten by truth on the next poll
+        self._notifications_on = notifications_on
+
         return {
             "devices": {d["physical_id"]: d for d in devices},
             "latest_alerts": latest_alerts,
             "alert_counts": alert_counts,
             "device_pics": device_pics,  # physical_id -> pic_url
-            # Carried from in-memory state — updated only when the switch is toggled
             "notifications_on": self._notifications_on,
         }

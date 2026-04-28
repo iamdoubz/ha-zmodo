@@ -297,11 +297,10 @@ class ZmodoApi:
         return data.get("data", [])
 
     async def get_notification_mode(self, app_address: str, token: str) -> bool:
-        """Return True if notifications are currently ON (mode=1).
+        """Return True if notifications are currently ON.
 
-        Queries /mode/user_mode_get and inspects the is_default flag on each
-        mode entry.  The mode whose is_default == "1" is the active one.
-        mode_type "0" = ON (notifications enabled), mode_type "1" = OFF.
+        POSTs to /mode/user_config_get with just the token.
+        Response data.mode: "0" = notifications ON, "1" = notifications OFF.
         """
         url = f"{app_address}{NOTIFICATION_GET_PATH}"
         data = await self._post(url, {"token": token}, token=token)
@@ -309,13 +308,8 @@ class ZmodoApi:
         if data.get("result") != "ok":
             raise ZmodoApiError(f"get_notification_mode failed: {data}")
 
-        for entry in data.get("data", []):
-            if entry.get("is_default") == "1":
-                # mode_type "0" = ON, "1" = OFF
-                return entry.get("mode_type") == "0"
-
-        # Default to ON if we can't determine the state
-        return True
+        # mode "0" = ON, mode "1" = OFF
+        return data.get("data", {}).get("mode") == "0"
 
     async def set_notification_mode(
         self, app_address: str, token: str, enable: bool
