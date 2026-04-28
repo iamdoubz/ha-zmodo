@@ -60,6 +60,7 @@ For each camera discovered on your account, the following entities are created:
 | `sensor.<name>_last_alert` | Timestamp | Time of the most recent motion event |
 | `sensor.<name>_alert_count_24h` | Number | Motion alert count in the last 24 hours |
 | `image.<name>_last_alert_image` | Image | Last motion clip image thumbnail |
+| `image.<name>_device_image` | Image | Physical device image |
 | `camera.<name>_last_alert_clip` | Camera | Last motion clip video (480p) |
 | `sensor.<name>_last_alert_image_url` | String | Last motion clip image URL |
 | `sensor.<name>_last_alert_video_url` | String | Last motion clip video URL |
@@ -67,7 +68,7 @@ For each camera discovered on your account, the following entities are created:
 
 ---
 
-## Notes
+## Known limitations
 
 - **Cloud-only**: All data passes through Zmodo/MeShare servers. No local network access to cameras is used.
 - **PTZ**: Pan/tilt commands travel over a certificate-pinned binary protocol on Zmodo's VDR servers and cannot be controlled via this integration.
