@@ -64,6 +64,17 @@ def build_alert_video_url(base: str, path: str, token: str, physical_id: str) ->
     return f"{base}/storage/get_file?{params}"
 
 
+
+def build_device_pic_url(base: str, path: str, token: str, physical_id: str) -> str:
+    """Build a fully-authenticated URL for a device product image.
+
+    GET /storage/get_file?token=TOKEN&physical_id=ID&url=PATH
+    The url param is the pic_url value returned by the storage_list endpoint.
+    """
+    params = urlencode({"token": token, "physical_id": physical_id, "url": path})
+    return f"{base}/storage/get_file?{params}"
+
+
 class ZmodoCoordinator(DataUpdateCoordinator):
     """Fetch devices and per-device latest alerts, refreshing the token proactively."""
 
@@ -199,6 +210,10 @@ class ZmodoCoordinator(DataUpdateCoordinator):
         """Return a fully-authenticated URL for an alert video clip."""
         return build_alert_video_url(self._alarm_base(), video_path, self._token, physical_id)
 
+    def device_pic_url(self, pic_path: str, physical_id: str) -> str:
+        """Return a fully-authenticated URL for a device product image."""
+        return build_device_pic_url(self._alarm_base(), pic_path, self._token, physical_id)
+
     async def async_set_notifications(self, enable: bool) -> None:
         """Toggle account-level push notifications on or off.
 
@@ -259,15 +274,36 @@ class ZmodoCoordinator(DataUpdateCoordinator):
                 )
         return []
 
+    async def _fetch_storage_list(self) -> dict[str, str]:
+        """Fetch pic_url for each device from the storage list endpoint.
+
+        Returns a dict of physical_id -> pic_url.
+        Best-effort — returns empty dict on failure so it never blocks the poll.
+        """
+        for addr in self._mng_addresses:
+            try:
+                items = await self._api.get_storage_list(addr, self._token)
+                return {
+                    item["physical_id"]: item["pic_url"]
+                    for item in items
+                    if item.get("physical_id") and item.get("pic_url")
+                }
+            except ZmodoApiError as exc:
+                _LOGGER.debug("Storage list failed for %s: %s", addr, exc)
+        return {}
+
     async def _async_update_data(self) -> dict[str, Any]:
-        """Poll devices and per-device alerts concurrently."""
+        """Poll devices, alerts, and device images concurrently."""
         devices = await self._fetch_devices()
 
-        # Fetch all 24h alerts for every device in parallel
+        # Fetch alerts and device images concurrently
         physical_ids = [d["physical_id"] for d in devices]
-        alert_results = await asyncio.gather(
-            *[self._fetch_alerts_for_device(pid) for pid in physical_ids],
-            return_exceptions=True,
+        alert_results, device_pics = await asyncio.gather(
+            asyncio.gather(
+                *[self._fetch_alerts_for_device(pid) for pid in physical_ids],
+                return_exceptions=True,
+            ),
+            self._fetch_storage_list(),
         )
 
         # Derive both latest alert and 24h count from the same list
@@ -286,6 +322,7 @@ class ZmodoCoordinator(DataUpdateCoordinator):
             "devices": {d["physical_id"]: d for d in devices},
             "latest_alerts": latest_alerts,
             "alert_counts": alert_counts,
+            "device_pics": device_pics,  # physical_id -> pic_url
             # Carried from in-memory state — updated only when the switch is toggled
             "notifications_on": self._notifications_on,
         }

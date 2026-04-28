@@ -17,6 +17,7 @@ from .const import (
     API_REFRESH_LOGIN_PATH,
     APP_MOP_HOSTS,
     DEVICE_LIST_PATH,
+    DEVICE_STORAGE_LIST_PATH,
     LOGIN_APP_VERSION,
     LOGIN_CID,
     LOGIN_CLIENT,
@@ -331,4 +332,17 @@ class ZmodoApi:
             raise ZmodoApiError(
                 f"set_notification_mode({'ON' if enable else 'OFF'}) failed: {data}"
             )
+
+    async def get_storage_list(self, mng_address: str, token: str) -> list[dict[str, Any]]:
+        """Fetch the storage list, which contains pic_url for each device.
+
+        Returns the raw data list; each entry includes physical_id and pic_url.
+        """
+        url = f"{mng_address}{DEVICE_STORAGE_LIST_PATH}"
+        data = await self._post(
+            url, {"token": token, "start": 0, "count": 999}, timeout=15
+        )
+        if data.get("result") != "ok":
+            raise ZmodoApiError(f"Storage list failed: {data}")
+        return data.get("data", [])
 

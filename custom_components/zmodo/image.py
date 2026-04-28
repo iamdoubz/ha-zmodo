@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timezone, UTC
 from typing import Any
 
 import aiohttp
@@ -29,10 +29,10 @@ async def async_setup_entry(
     """Set up one thumbnail image entity per device."""
     coordinator: ZmodoCoordinator = hass.data[DOMAIN][entry.entry_id]
 
-    entities = [
-        ZmodoAlertImage(coordinator, device)
-        for device in coordinator.data["devices"].values()
-    ]
+    entities = []
+    for device in coordinator.data["devices"].values():
+        entities.append(ZmodoAlertImage(coordinator, device))
+        entities.append(ZmodoDeviceImage(coordinator, device))
     async_add_entities(entities, update_before_add=True)
 
 
@@ -149,3 +149,82 @@ class ZmodoAlertImage(CoordinatorEntity, ImageEntity):
         attrs["video_path"] = alert.get("video_url")
 
         return attrs
+
+
+class ZmodoDeviceImage(CoordinatorEntity, ImageEntity):
+    """Image entity showing the physical device product photo.
+
+    The image is fetched from the storage_list pic_url via the alarm server
+    proxy endpoint, which requires the token and physical_id.  Because the
+    device photo never changes between polls, image_last_updated is set once
+    at entity creation so HA fetches it exactly once and caches it.
+    """
+
+    _attr_has_entity_name = True
+    _attr_name = "Device Image"
+    _attr_content_type = "image/png"
+    _attr_entity_category = None  # show in the main entity list
+
+    def __init__(
+        self,
+        coordinator: ZmodoCoordinator,
+        device: dict[str, Any],
+    ) -> None:
+        CoordinatorEntity.__init__(self, coordinator)
+        ImageEntity.__init__(self, coordinator.hass)
+
+        self._physical_id: str = device["physical_id"]
+        self._attr_unique_id = f"zmodo_device_image_{self._physical_id}"
+        # Fixed timestamp — device image doesn't change, so HA fetches it once
+        self._created_at: datetime = datetime.now(UTC)
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        return DeviceInfo(identifiers={(DOMAIN, self._physical_id)})
+
+    @property
+    def _pic_url(self) -> str | None:
+        """Return the raw pic_url path for this device, or None if unavailable."""
+        return self.coordinator.data.get("device_pics", {}).get(self._physical_id)
+
+    @property
+    def image_last_updated(self) -> datetime | None:
+        """Return a fixed timestamp so HA fetches the image once and caches it."""
+        return self._created_at if self._pic_url else None
+
+    async def async_image(self) -> bytes | None:
+        """Fetch and return the device product image bytes."""
+        pic_path = self._pic_url
+        if not pic_path:
+            return None
+
+        url = self.coordinator.device_pic_url(pic_path, self._physical_id)
+        session = async_get_clientsession(self.hass)
+
+        try:
+            async with session.get(
+                url, timeout=aiohttp.ClientTimeout(total=15)
+            ) as resp:
+                if resp.status == 200:
+                    return await resp.read()
+                _LOGGER.debug(
+                    "Device image fetch for %s returned HTTP %d",
+                    self._physical_id,
+                    resp.status,
+                )
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.debug(
+                "Device image fetch for %s failed: %s", self._physical_id, err
+            )
+
+        return None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        pic_path = self._pic_url
+        if not pic_path:
+            return {}
+        return {
+            "pic_path": pic_path,
+            "image_url": self.coordinator.device_pic_url(pic_path, self._physical_id),
+        }
