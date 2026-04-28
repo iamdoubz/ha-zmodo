@@ -215,6 +215,21 @@ class ZmodoCoordinator(DataUpdateCoordinator):
         """Return a fully-authenticated URL for a device product image."""
         return build_device_pic_url(self._alarm_base(), pic_path, self._token, physical_id)
 
+    async def async_set_device_frame_rate(self, physical_id: str, frame_rate: int) -> None:
+        """Set the frame rate for a device and update coordinator data optimistically."""
+        devices = self.data.get("devices", {})
+        if physical_id in devices:
+            devices[physical_id]["frame_rate"] = str(frame_rate)
+        self.async_update_listeners()
+
+        for addr in self._mng_addresses:
+            try:
+                await self._api.set_device_frame_rate(addr, self._token, physical_id, frame_rate)
+                return
+            except ZmodoApiError as exc:
+                _LOGGER.debug("set_device_frame_rate failed for %s on %s: %s", physical_id, addr, exc)
+        _LOGGER.warning("set_device_frame_rate failed on all management addresses for %s", physical_id)
+
     async def async_set_device_volume(self, physical_id: str, volume: int) -> None:
         """Set the speaker volume for a device and update coordinator data optimistically."""
         # Optimistic update so the slider snaps to the new value immediately

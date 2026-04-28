@@ -356,6 +356,34 @@ class ZmodoApi:
         if data.get("result") != "ok":
             raise ZmodoApiError(f"set_device_volume failed: {data}")
 
+    async def set_device_frame_rate(
+        self,
+        mng_address: str,
+        token: str,
+        physical_id: str,
+        frame_rate: int,
+    ) -> None:
+        """Set the frame rate for a device (10, 20, or 25 fps).
+
+        POSTs to /device/device_modify with frame_rate, physical_id, token.
+        """
+        if frame_rate not in (10, 20, 25):
+            raise ValueError(f"frame_rate must be 10, 20, or 25; got {frame_rate}")
+
+        url = f"{mng_address}{DEVICE_MODIFY_PATH}"
+        data = await self._post(
+            url,
+            {
+                "frame_rate": str(frame_rate),
+                "physical_id": physical_id,
+                "token": token,
+            },
+            token=token,
+            timeout=10,
+        )
+        if data.get("result") != "ok":
+            raise ZmodoApiError(f"set_device_frame_rate failed: {data}")
+
     async def get_storage_list(self, mng_address: str, token: str) -> list[dict[str, Any]]:
         """Fetch the storage list, which contains pic_url for each device.
 
