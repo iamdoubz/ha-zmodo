@@ -218,13 +218,13 @@ class ZmodoCoordinator(DataUpdateCoordinator):
     async def async_set_device_mute(self, physical_id: str, mic_active: bool) -> None:
         """Set microphone state for a device and update coordinator data optimistically.
 
-        mic_active=True  → microphone on  (mute field = "0" in device data)
-        mic_active=False → microphone off (mute field = "1" in device data)
+        mic_active=True  → microphone on  (mute field = "1" in device data)
+        mic_active=False → microphone off (mute field = "0" in device data)
         """
         devices = self.data.get("devices", {})
         if physical_id in devices:
-            # mute field in device data: "0"=mic on, "1"=mic off — inverted from bool
-            devices[physical_id]["mute"] = "0" if mic_active else "1"
+            # mute field in device data: "1"=mic on, "0"=mic off
+            devices[physical_id]["mute"] = "1" if mic_active else "0"
         self.async_update_listeners()
 
         device_type = devices.get(physical_id, {}).get("device_type", "22")

@@ -99,8 +99,8 @@ class ZmodoMicrophoneSwitch(CoordinatorEntity, SwitchEntity):
     """Switch to enable or disable the microphone on a Zmodo camera.
 
     The device list returns a "mute" field for each device:
-      mute = "0" → microphone is active (switch ON)
-      mute = "1" → microphone is muted  (switch OFF)
+      mute = "1" → microphone is active (switch ON)
+      mute = "0" → microphone is muted  (switch OFF)
 
     The API uses the same inverted convention; the inversion is handled
     in coordinator.async_set_device_mute() and api.set_device_mute() so
@@ -131,8 +131,8 @@ class ZmodoMicrophoneSwitch(CoordinatorEntity, SwitchEntity):
 
     @property
     def is_on(self) -> bool:
-        """Return True when the microphone is active (mute field = "0")."""
-        return self._current_device.get("mute", "0") == "0"
+        """Return True when the microphone is active (mute field = "1")."""
+        return self._current_device.get("mute", "0") == "1"
 
     @property
     def available(self) -> bool:
