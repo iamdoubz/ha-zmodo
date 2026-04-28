@@ -417,6 +417,55 @@ class ZmodoApi:
         if data.get("result") != "ok":
             raise ZmodoApiError(f"set_device_mute failed: {data}")
 
+    async def set_device_nightvision(
+        self,
+        mng_address: str,
+        token: str,
+        physical_id: str,
+        mode: int,
+    ) -> None:
+        """Set the night vision mode for a device.
+
+        mode: 1 = Auto, 2 = Always On, 3 = Always Off
+        """
+        if mode not in (1, 2, 3):
+            raise ValueError(f"nightvision must be 1, 2, or 3; got {mode}")
+
+        url = f"{mng_address}{DEVICE_MODIFY_PATH}"
+        data = await self._post(
+            url,
+            {"nightvision": str(mode), "physical_id": physical_id, "token": token},
+            token=token,
+            timeout=10,
+        )
+        if data.get("result") != "ok":
+            raise ZmodoApiError(f"set_device_nightvision failed: {data}")
+
+    async def set_device_night_level(
+        self,
+        mng_address: str,
+        token: str,
+        physical_id: str,
+        level: int,
+    ) -> None:
+        """Set the night vision sensitivity level for a device.
+
+        level: 0 = Low, 1 = Normal, 2 = High
+        Only applies when nightvision mode is 1 (Auto).
+        """
+        if level not in (0, 1, 2):
+            raise ValueError(f"night_level must be 0, 1, or 2; got {level}")
+
+        url = f"{mng_address}{DEVICE_MODIFY_PATH}"
+        data = await self._post(
+            url,
+            {"night_level": str(level), "physical_id": physical_id, "token": token},
+            token=token,
+            timeout=10,
+        )
+        if data.get("result") != "ok":
+            raise ZmodoApiError(f"set_device_night_level failed: {data}")
+
     async def get_storage_list(self, mng_address: str, token: str) -> list[dict[str, Any]]:
         """Fetch the storage list, which contains pic_url for each device.
 
