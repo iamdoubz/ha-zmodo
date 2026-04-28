@@ -8,5 +8,5 @@
   "issue_tracker": "https://github.com/iamdoubz/ha-zmodo/issues",
   "loggers": ["custom_components.zmodo"],
   "requirements": [],
-  "version": "v2026.4.19"
+  "version": "v2026.4.20"
 }
