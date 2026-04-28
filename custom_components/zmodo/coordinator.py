@@ -38,13 +38,29 @@ TOKEN_REFRESH_INTERVAL = 20 * 60  # 20 minutes — 4 min before the 24-min expir
 
 
 def build_alert_media_url(base: str, path: str, token: str) -> str:
-    """Build a fully-authenticated URL for an alert image or video.
+    """Build a fully-authenticated URL for an alert thumbnail image.
 
-    The alarm server serves media at /storage/get_file?token=TOKEN&url=PATH.
-    base should be the first alarm address from the coordinator (e.g.
-    https://11-alarm-mop.meshare.com) — the same host used to fetch alerts.
+    GET /storage/get_file?token=TOKEN&url=PATH
     """
     params = urlencode({"token": token, "url": path})
+    return f"{base}/storage/get_file?{params}"
+
+
+def build_alert_video_url(base: str, path: str, token: str, physical_id: str) -> str:
+    """Build a fully-authenticated URL for an alert video clip.
+
+    Video clips require three extra params beyond the image URL:
+      transcoding=1   — always 1; tells the server to serve as MP4
+      physical_id     — the camera's physical ID
+      _file=alarm.mp4 — forces the filename/extension in the response
+    """
+    params = urlencode({
+        "token": token,
+        "url": path,
+        "transcoding": "1",
+        "physical_id": physical_id,
+        "_file": "alarm.mp4",
+    })
     return f"{base}/storage/get_file?{params}"
 
 
@@ -179,9 +195,9 @@ class ZmodoCoordinator(DataUpdateCoordinator):
         """Return a fully-authenticated URL for an alert thumbnail."""
         return build_alert_media_url(self._alarm_base(), image_path, self._token)
 
-    def alert_video_url(self, video_path: str) -> str:
+    def alert_video_url(self, video_path: str, physical_id: str) -> str:
         """Return a fully-authenticated URL for an alert video clip."""
-        return build_alert_media_url(self._alarm_base(), video_path, self._token)
+        return build_alert_video_url(self._alarm_base(), video_path, self._token, physical_id)
 
     async def async_set_notifications(self, enable: bool) -> None:
         """Toggle account-level push notifications on or off.
