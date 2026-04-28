@@ -279,7 +279,7 @@ class ZmodoAlertCamera(CoordinatorEntity, Camera):
         alert = self._latest_alert
         if not alert or not alert.get("video_url"):
             return None
-        return self.coordinator.alert_video_url(alert["video_url"])
+        return self.coordinator.alert_video_url(alert["video_url"], self._physical_id)
 
     async def async_camera_image(
         self, width: int | None = None, height: int | None = None
@@ -315,7 +315,7 @@ class ZmodoAlertCamera(CoordinatorEntity, Camera):
             "alert_read": alert.get("if_read") == "1",
         }
         if alert.get("video_url"):
-            attrs["video_url"] = self.coordinator.alert_video_url(alert["video_url"])
+            attrs["video_url"] = self.coordinator.alert_video_url(alert["video_url"], self._physical_id)
         if alert.get("image_url"):
             attrs["image_url"] = self.coordinator.alert_image_url(alert["image_url"])
         return attrs

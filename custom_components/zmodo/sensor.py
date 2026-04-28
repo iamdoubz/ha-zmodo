@@ -83,7 +83,7 @@ class ZmodoLastAlertSensor(CoordinatorEntity, SensorEntity):
         if alert.get("image_url"):
             attrs["image_url"] = self.coordinator.alert_image_url(alert["image_url"])
         if alert.get("video_url"):
-            attrs["video_url"] = self.coordinator.alert_video_url(alert["video_url"])
+            attrs["video_url"] = self.coordinator.alert_video_url(alert["video_url"], self._physical_id)
 
         return attrs
 
@@ -186,7 +186,7 @@ class ZmodoAlertVideoUrlSensor(CoordinatorEntity, SensorEntity):
         alert = self._latest_alert
         if not alert or not alert.get("video_url"):
             return None
-        return self.coordinator.alert_video_url(alert["video_url"])
+        return self.coordinator.alert_video_url(alert["video_url"], self._physical_id)
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:

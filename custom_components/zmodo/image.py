@@ -142,7 +142,7 @@ class ZmodoAlertImage(CoordinatorEntity, ImageEntity):
 
         # Add the authenticated video URL so automations / Lovelace can use it
         if alert.get("video_url"):
-            attrs["video_url"] = self.coordinator.alert_video_url(alert["video_url"])
+            attrs["video_url"] = self.coordinator.alert_video_url(alert["video_url"], self._physical_id)
 
         # Also include the raw (unauthenticated) paths for reference
         attrs["image_path"] = alert.get("image_url")
