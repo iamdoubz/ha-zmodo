@@ -41,7 +41,7 @@ CONF_ALARM_ADDRESSES = "alarm_addresses"
 CONF_MNG_ADDRESSES = "mng_addresses"
 
 # Coordinator update interval (seconds)
-UPDATE_INTERVAL = 60
+UPDATE_INTERVAL = 5
 
 # Alert fetch window (seconds): 24 hours
 ALERT_WINDOW_SECONDS = 86400
