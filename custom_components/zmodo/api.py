@@ -17,6 +17,7 @@ from .const import (
     API_REFRESH_LOGIN_PATH,
     APP_MOP_HOSTS,
     DEVICE_LIST_PATH,
+    DEVICE_MODIFY_PATH,
     DEVICE_STORAGE_LIST_PATH,
     LOGIN_APP_VERSION,
     LOGIN_CID,
@@ -326,6 +327,34 @@ class ZmodoApi:
             raise ZmodoApiError(
                 f"set_notification_mode({'ON' if enable else 'OFF'}) failed: {data}"
             )
+
+    async def set_device_volume(
+        self,
+        mng_address: str,
+        token: str,
+        physical_id: str,
+        volume: int,
+    ) -> None:
+        """Set the speaker volume for a device (0–100).
+
+        POSTs to /device/device_modify with device_volume, physical_id, token.
+        """
+        if not 0 <= volume <= 100:
+            raise ValueError(f"Volume must be 0–100, got {volume}")
+
+        url = f"{mng_address}{DEVICE_MODIFY_PATH}"
+        data = await self._post(
+            url,
+            {
+                "device_volume": str(volume),
+                "physical_id": physical_id,
+                "token": token,
+            },
+            token=token,
+            timeout=10,
+        )
+        if data.get("result") != "ok":
+            raise ZmodoApiError(f"set_device_volume failed: {data}")
 
     async def get_storage_list(self, mng_address: str, token: str) -> list[dict[str, Any]]:
         """Fetch the storage list, which contains pic_url for each device.
