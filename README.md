@@ -64,7 +64,8 @@ For each camera discovered on your account, the following entities are created:
 | `camera.<name>_last_alert_clip` | Camera | Last motion clip video (480p) |
 | `sensor.<name>_last_alert_image_url` | String | Last motion clip image URL |
 | `sensor.<name>_last_alert_video_url` | String | Last motion clip video URL |
-| `switch.<name>_notifications` | Switch | Toggle Notifications |
+| `switch.<name>_notifications` | Switch | Toggle notifications |
+| `switch.<name>_microphone` | Switch | Toggle device microphone |
 
 ---
 
