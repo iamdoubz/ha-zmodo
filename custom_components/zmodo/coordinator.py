@@ -238,6 +238,36 @@ class ZmodoCoordinator(DataUpdateCoordinator):
                 _LOGGER.debug("set_device_mute failed for %s on %s: %s", physical_id, addr, exc)
         _LOGGER.warning("set_device_mute failed on all management addresses for %s", physical_id)
 
+    async def async_set_device_nightvision(self, physical_id: str, mode: int) -> None:
+        """Set night vision mode and update coordinator data optimistically."""
+        devices = self.data.get("devices", {})
+        if physical_id in devices:
+            devices[physical_id]["nightvision"] = str(mode)
+        self.async_update_listeners()
+
+        for addr in self._mng_addresses:
+            try:
+                await self._api.set_device_nightvision(addr, self._token, physical_id, mode)
+                return
+            except ZmodoApiError as exc:
+                _LOGGER.debug("set_device_nightvision failed for %s on %s: %s", physical_id, addr, exc)
+        _LOGGER.warning("set_device_nightvision failed on all management addresses for %s", physical_id)
+
+    async def async_set_device_night_level(self, physical_id: str, level: int) -> None:
+        """Set night vision sensitivity and update coordinator data optimistically."""
+        devices = self.data.get("devices", {})
+        if physical_id in devices:
+            devices[physical_id]["night_level"] = str(level)
+        self.async_update_listeners()
+
+        for addr in self._mng_addresses:
+            try:
+                await self._api.set_device_night_level(addr, self._token, physical_id, level)
+                return
+            except ZmodoApiError as exc:
+                _LOGGER.debug("set_device_night_level failed for %s on %s: %s", physical_id, addr, exc)
+        _LOGGER.warning("set_device_night_level failed on all management addresses for %s", physical_id)
+
     async def async_set_device_frame_rate(self, physical_id: str, frame_rate: int) -> None:
         """Set the frame rate for a device and update coordinator data optimistically."""
         devices = self.data.get("devices", {})
