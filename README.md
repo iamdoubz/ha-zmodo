@@ -13,18 +13,22 @@ A Home Assistant custom integration for **Zmodo / MeShare** cloud cameras.
 
 ---
 
-## Features
+## ⚡ Features
 
 - 📷 **Camera entities** — SD and HD stream for each device
+- 🎦 **Camera frame rate** — choose from low to high frame rate to control video quality
 - 🔔 **Motion alert sensors** — last alert timestamp and 24-hour alert count per camera
+- 🔊 **Volume slider** — increase and decrease device volume levels
+- 🎙️ **Microphone switch** — turn your device's microphone on or off
+- 🌙👁️ **Nightvision** — configure on/off/auto with sensitivity settings low/normal/high
 - 🔄 **Automatic token refresh** — silently re-authenticates every 20 minutes using the same mechanism as the mobile app (no captcha, no re-entering credentials)
 - 🔌 **Config flow** — set up from the HA UI with just your email and password
 
 ---
 
-## Installation
+## 📖 Installation
 
-### Via HACS (recommended)
+### 🔄 Via HACS (recommended)
 
 1. In Home Assistant, go to **HACS → Integrations**.
 2. Click the three-dot menu (⋮) and choose **Custom repositories**.
@@ -32,7 +36,7 @@ A Home Assistant custom integration for **Zmodo / MeShare** cloud cameras.
 4. Find **Zmodo** in the HACS store and click **Download**.
 5. Restart Home Assistant.
 
-### Manual
+### ⬇️ Manual
 
 1. Download the [latest release](https://github.com/iamdoubz/ha-zmodo/releases/latest).
 2. Copy the `custom_components/zmodo` folder into your HA `config/custom_components/` directory.
@@ -40,7 +44,7 @@ A Home Assistant custom integration for **Zmodo / MeShare** cloud cameras.
 
 ---
 
-## Setup
+## ⚙️ Setup
 
 1. Go to **Settings → Devices & Services → Add Integration**.
 2. Search for **Zmodo**.
@@ -49,7 +53,7 @@ A Home Assistant custom integration for **Zmodo / MeShare** cloud cameras.
 
 ---
 
-## Entities
+## 💡 Entities
 
 For each camera discovered on your account, the following entities are created:
 
@@ -66,10 +70,14 @@ For each camera discovered on your account, the following entities are created:
 | `sensor.<name>_last_alert_video_url` | String | Last motion clip video URL |
 | `switch.<name>_notifications` | Switch | Toggle notifications |
 | `switch.<name>_microphone` | Switch | Toggle device microphone |
+| `number.<name>_volume` | Number | Device volume slider |
+| `select.<name>_frame_rate` | Select | Select device video frame rate |
+| `select.<name>_night_vision_mode` | Select | Select device nightvision mode |
+| `select.<name>_night_vision_sensitivity` | Select | Select device nightvision sensitivity |
 
 ---
 
-## Known limitations
+## 🤷 Known limitations
 
 - **Cloud-only**: All data passes through Zmodo/MeShare servers. No local network access to cameras is used.
 - **PTZ**: Pan/tilt commands travel over a certificate-pinned binary protocol on Zmodo's VDR servers and cannot be controlled via this integration.
@@ -77,7 +85,7 @@ For each camera discovered on your account, the following entities are created:
 
 ---
 
-## Troubleshooting
+## ⁉️ Troubleshooting
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
@@ -87,7 +95,7 @@ For each camera discovered on your account, the following entities are created:
 
 ---
 
-## Contributing
+## 🥼 Contributing
 
 Pull requests welcome! Please open an issue first to discuss major changes.
 
