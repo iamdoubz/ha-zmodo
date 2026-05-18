@@ -32,7 +32,7 @@ LOGIN_PLATFORM = "2"
 LOGIN_CLIENT = "1"          # iOS app sends client=1; web sends client=2
 LOGIN_LANGUAGE = "en"
 LOGIN_APP_VERSION = "5.0"   # app_version field sent by iOS app
-LOGIN_CLIENT_VERSION = "7.0.2"  # client_version sent in refresh
+LOGIN_CLIENT_VERSION = "7.1.2"  # client_version sent in refresh
 
 # Config entry keys
 CONF_TOKEN = "token"
