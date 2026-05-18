@@ -6,11 +6,14 @@
 
 [![HACS Custom][hacs-shield]][hacs-url]
 [![GitHub Release][release-shield]][release-url]
+[![GitHub Issues][issues-shield]][issues-url]
 [![License][license-shield]](LICENSE)
 
 A Home Assistant custom integration for **Zmodo / MeShare** cloud cameras.
 
 > **Note:** This integration uses Zmodo's cloud API (the same one the iOS/Android app uses). Your cameras must be connected to the Zmodo/MeShare cloud — local-only setups are not supported.
+
+[![Open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=iamdoubz&repository=ha-zmodo&category=Integration)
 
 ---
 
