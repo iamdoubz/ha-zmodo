@@ -6,7 +6,7 @@
 
 [![HACS Custom][hacs-shield]][hacs-url]
 [![GitHub Release][release-shield]][release-url]
-[![GitHub Issues][issues-shield]][issue-url]
+[![GitHub Issue][issue-shield]][issue-url]
 [![License][license-shield]](LICENSE)
 
 A Home Assistant custom integration for **Zmodo / MeShare** cloud cameras.
