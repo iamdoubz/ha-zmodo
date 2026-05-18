@@ -51,9 +51,9 @@ def _app_info() -> str:
     """Build the app_info JSON string the iOS app sends on login."""
     return json.dumps(
         {
-            "version_name": LOGIN_APP_VERSION,
-            "SYS_SDK": "18.0",
-            "SYS_RELEASE": "18.0",
+            "version_name": LOGIN_CLIENT_VERSION,
+            "SYS_SDK": "26.4.2",
+            "SYS_RELEASE": "26.4.2",
             "MODEL": "Home Assistant",
         },
         separators=(",", ":"),
