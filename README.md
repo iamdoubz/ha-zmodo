@@ -1,5 +1,6 @@
-| [![zmodo-social.png](img/zmodo-social.png)](img/zmodo-social.png) |
-| :---: |
+<p align="center">
+  <img src="img/zmodo-social.png" alt="social media image of the zmodo corporate logo in blue and a white home assistant icon centered with a black background and rounded edges">
+</p>
 
 # Zmodo Home Assistant Integration
 
