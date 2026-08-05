@@ -10,6 +10,8 @@ API_REFRESH_LOGIN_PATH = "/user/refresh_login"
 APP_MOP_HOSTS = [
     "https://11-app-mop.meshare.com",
     "https://12-app-mop.meshare.com",
+    "https://11-app-mop.iotek.ai",
+    "https://12-app-mop.iotek.ai",
 ]
 
 DEVICE_LIST_PATH = "/device/device_list"
@@ -32,7 +34,7 @@ LOGIN_PLATFORM = "2"
 LOGIN_CLIENT = "1"          # iOS app sends client=1; web sends client=2
 LOGIN_LANGUAGE = "en"
 LOGIN_APP_VERSION = "5.0"   # app_version field sent by iOS app
-LOGIN_CLIENT_VERSION = "7.1.2"  # client_version sent in refresh
+LOGIN_CLIENT_VERSION = "7.1.4"  # client_version sent in refresh
 
 # Config entry keys
 CONF_TOKEN = "token"
