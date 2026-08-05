@@ -52,8 +52,8 @@ def _app_info() -> str:
     return json.dumps(
         {
             "version_name": LOGIN_CLIENT_VERSION,
-            "SYS_SDK": "26.4.2",
-            "SYS_RELEASE": "26.4.2",
+            "SYS_SDK": "26.5.2",
+            "SYS_RELEASE": "26.5.2",
             "MODEL": "Home Assistant",
         },
         separators=(",", ":"),
