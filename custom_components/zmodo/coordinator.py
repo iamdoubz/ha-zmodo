@@ -19,7 +19,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
-from .api import ZmodoApi, ZmodoApiError, ZmodoAuthError
+from .api import ZmodoApi, ZmodoApiError, ZmodoAuthError, stable_client_uuid
 from .const import (
     APP_MOP_HOSTS,
     CONF_ALARM_ADDRESSES,
@@ -145,51 +145,87 @@ class ZmodoCoordinator(DataUpdateCoordinator):
         return self._token
 
     async def _refresh_token(self) -> bool:
-        """Silently refresh the session token using the stored login_cert."""
-        if not self._login_cert or not self._client_uuid:
-            _LOGGER.debug("No login_cert stored; cannot refresh token silently")
+        """Refresh the session token, falling back to a full password login.
+
+        First tries the silent refresh_login with the stored login_cert. If the
+        server rejects it (e.g. result 1300 — cert revoked/expired) or there is
+        no cert, performs a full login with the stored email/password so the
+        integration recovers on its own instead of looping on a dead session.
+        """
+        if self._login_cert and self._client_uuid:
+            try:
+                data = await self._api.refresh_login(
+                    current_token=self._token,
+                    login_cert=self._login_cert,
+                    client_uuid=self._client_uuid,
+                )
+            except ZmodoAuthError as err:
+                _LOGGER.info(
+                    "Token refresh rejected by server (%s); falling back to full login",
+                    err,
+                )
+            except Exception as err:  # noqa: BLE001
+                _LOGGER.debug("Token refresh network error: %s", err)
+                return False
+            else:
+                self._apply_session(data)
+                _LOGGER.debug("Zmodo token refreshed and persisted to config entry")
+                return True
+        else:
+            _LOGGER.debug("No login_cert stored; attempting full login")
+
+        return await self._full_login()
+
+    async def _full_login(self) -> bool:
+        """Log in again with the stored email/password and persist the new session."""
+        email = self._entry.data.get("email")
+        password = self._entry.data.get("password")
+        if not email or not password:
+            _LOGGER.warning("No stored credentials; cannot re-login to Zmodo")
             return False
 
+        if not self._client_uuid:
+            self._client_uuid = stable_client_uuid()
+
         try:
-            data = await self._api.refresh_login(
-                current_token=self._token,
-                login_cert=self._login_cert,
+            data = await self._api.login(
+                email=email,
+                password_plain=password,
                 client_uuid=self._client_uuid,
             )
         except ZmodoAuthError as err:
-            _LOGGER.warning("Token refresh rejected by server: %s", err)
+            _LOGGER.warning("Zmodo re-login rejected by server: %s", err)
             return False
         except Exception as err:  # noqa: BLE001
-            _LOGGER.debug("Token refresh network error: %s", err)
+            _LOGGER.warning("Zmodo re-login failed: %s", err)
             return False
 
-        new_token = data.get("token", self._token)
-        new_cert = data.get("login_cert", self._login_cert)
-        host_list = data.get("host_list", {})
-        new_mng = host_list.get("mng_address", self._mng_addresses)
-        new_alarm = host_list.get("alarm_address", self._alarm_addresses)
-        new_app = host_list.get("app_address", self._entry.data.get(CONF_APP_ADDRESSES, []))
+        self._apply_session(data)
+        _LOGGER.info("Zmodo session re-established via full login")
+        return True
 
-        self._token = new_token
-        self._login_cert = new_cert
-        self._mng_addresses = new_mng
-        self._alarm_addresses = new_alarm
-        self._app_addresses = new_app
+    def _apply_session(self, data: dict[str, Any]) -> None:
+        """Store token/cert/host lists from a login or refresh response."""
+        host_list = data.get("host_list") or {}
+        self._token = data.get("token", self._token)
+        self._login_cert = data.get("login_cert", self._login_cert)
+        self._mng_addresses = host_list.get("mng_address") or self._mng_addresses
+        self._alarm_addresses = host_list.get("alarm_address") or self._alarm_addresses
+        self._app_addresses = host_list.get("app_address") or self._app_addresses
         self._token_refreshed_at = time.monotonic()
 
         self.hass.config_entries.async_update_entry(
             self._entry,
             data={
                 **self._entry.data,
-                CONF_TOKEN: new_token,
-                CONF_LOGIN_CERT: new_cert,
-                CONF_MNG_ADDRESSES: new_mng,
-                CONF_ALARM_ADDRESSES: new_alarm,
-                CONF_APP_ADDRESSES: new_app,
+                CONF_TOKEN: self._token,
+                CONF_LOGIN_CERT: self._login_cert,
+                CONF_CLIENT_UUID: self._client_uuid,
+                CONF_MNG_ADDRESSES: self._mng_addresses,
+                CONF_ALARM_ADDRESSES: self._alarm_addresses,
+                CONF_APP_ADDRESSES: self._app_addresses,
             },
         )
-        _LOGGER.debug("Zmodo token refreshed and persisted to config entry")
-        return True
 
     # ------------------------------------------------------------------
     # Helpers
