@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any
 
 from homeassistant.components.sensor import SensorDeviceClass, SensorEntity
@@ -14,6 +14,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
 from .coordinator import ZmodoCoordinator
+from .relay import alert_media_relay_path
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -54,36 +55,34 @@ class ZmodoLastAlertSensor(CoordinatorEntity, SensorEntity):
 
     @property
     def _latest_alert(self) -> dict | None:
-        return self.coordinator.data.get("latest_alerts", {}).get(self._physical_id)
+        """Newest alert from the platform API."""
+        alerts = self.coordinator.data.get("platform_alerts", {}).get(self._physical_id)
+        return alerts[0] if alerts else None
 
     @property
     def native_value(self) -> datetime | None:
         """Return the timestamp of the most recent alert."""
-        alert = self._latest_alert
-        if not alert:
-            return None
-        ts = alert.get("timestamp") or alert.get("alarm_time")
-        if ts is None:
-            return None
-        return datetime.fromtimestamp(int(ts), tz=timezone.utc)
+        return self.coordinator.data.get("last_alert_time", {}).get(self._physical_id)
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
-        """Expose alert metadata including authenticated media URLs."""
+        """Expose alert metadata, plus legacy media URLs when available."""
         alert = self._latest_alert
         if not alert:
             return {}
 
         attrs: dict[str, Any] = {
             "alert_id": alert.get("id"),
-            "alert_read": alert.get("if_read") == "1",
-            "video_duration_seconds": alert.get("video_last"),
+            "reason": alert.get("reason"),
+            "severity": alert.get("severity"),
+            "alert_read": bool(alert.get("read")),
+            "has_image": bool(alert.get("has_image")),
         }
 
-        if alert.get("image_url"):
-            attrs["image_url"] = self.coordinator.alert_image_url(alert["image_url"])
-        if alert.get("video_url"):
-            attrs["video_url"] = self.coordinator.alert_video_url(alert["video_url"], self._physical_id)
+        entry_id = self.coordinator.entry_id
+        if alert.get("has_image"):
+            attrs["image_url"] = alert_media_relay_path(entry_id, alert["id"], "image")
+        attrs["video_url"] = alert_media_relay_path(entry_id, alert["id"], "clip")
 
         return attrs
 
@@ -111,90 +110,62 @@ class ZmodoAlertCountSensor(CoordinatorEntity, SensorEntity):
         return self.coordinator.data.get("alert_counts", {}).get(self._physical_id, 0)
 
 
-class ZmodoAlertImageUrlSensor(CoordinatorEntity, SensorEntity):
-    """Sensor: authenticated URL of the latest alert thumbnail image.
+class _AlertUrlSensor(CoordinatorEntity, SensorEntity):
+    """Base: relative, HA-authenticated relay path to the latest alert's media.
 
-    The state is a plain URL string so it can be used directly in
-    Lovelace picture cards, template sensors, and automations without
-    needing the image_proxy endpoint.  The URL is re-resolved from the
-    coordinator on every state update so it always carries a fresh token.
+    Usable directly in companion-app notifications (``image:``/``video:``)
+    and by any client sending an HA access token. Paths stay stable per alert.
     """
 
     _attr_has_entity_name = True
+    _kind = "image"
+
+    def __init__(self, coordinator: ZmodoCoordinator, device: dict[str, Any]) -> None:
+        super().__init__(coordinator)
+        self._physical_id: str = device["physical_id"]
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        return DeviceInfo(identifiers={(DOMAIN, self._physical_id)})
+
+    @property
+    def _latest_alert(self) -> dict | None:
+        return self.coordinator.data.get("latest_alerts", {}).get(self._physical_id)
+
+    @property
+    def native_value(self) -> str | None:
+        alert = self._latest_alert
+        if not alert or (self._kind == "image" and not alert.get("has_image")):
+            return None
+        return alert_media_relay_path(self.coordinator.entry_id, alert["id"], self._kind)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        alert = self._latest_alert
+        if not alert:
+            return {}
+        return {"alert_id": alert.get("id"), "alert_time": alert.get("ts")}
+
+
+class ZmodoAlertImageUrlSensor(_AlertUrlSensor):
+    """Sensor: relay path of the latest alert still image."""
+
     _attr_name = "Last Alert Image URL"
     _attr_icon = "mdi:image"
+    _kind = "image"
 
     def __init__(self, coordinator: ZmodoCoordinator, device: dict[str, Any]) -> None:
-        super().__init__(coordinator)
-        self._physical_id: str = device["physical_id"]
+        super().__init__(coordinator, device)
         self._attr_unique_id = f"zmodo_alert_image_url_{self._physical_id}"
 
-    @property
-    def device_info(self) -> DeviceInfo:
-        return DeviceInfo(identifiers={(DOMAIN, self._physical_id)})
 
-    @property
-    def _latest_alert(self) -> dict | None:
-        return self.coordinator.data.get("latest_alerts", {}).get(self._physical_id)
+class ZmodoAlertVideoUrlSensor(_AlertUrlSensor):
+    """Sensor: relay path of the latest alert MP4 clip."""
 
-    @property
-    def native_value(self) -> str | None:
-        """Return the full authenticated image URL, or None if no alert."""
-        alert = self._latest_alert
-        if not alert or not alert.get("image_url"):
-            return None
-        return self.coordinator.alert_image_url(alert["image_url"])
-
-    @property
-    def extra_state_attributes(self) -> dict[str, Any]:
-        alert = self._latest_alert
-        if not alert:
-            return {}
-        return {
-            "alert_id": alert.get("id"),
-            "image_path": alert.get("image_url"),
-        }
-
-
-class ZmodoAlertVideoUrlSensor(CoordinatorEntity, SensorEntity):
-    """Sensor: authenticated URL of the latest alert video clip.
-
-    The state is a plain URL string that can be passed to a media player
-    card or used in automations.  The video is MP4 / BT.709 with AAC audio.
-    """
-
-    _attr_has_entity_name = True
     _attr_name = "Last Alert Video URL"
     _attr_icon = "mdi:video"
+    _kind = "clip"
 
     def __init__(self, coordinator: ZmodoCoordinator, device: dict[str, Any]) -> None:
-        super().__init__(coordinator)
-        self._physical_id: str = device["physical_id"]
+        super().__init__(coordinator, device)
         self._attr_unique_id = f"zmodo_alert_video_url_{self._physical_id}"
-
-    @property
-    def device_info(self) -> DeviceInfo:
-        return DeviceInfo(identifiers={(DOMAIN, self._physical_id)})
-
-    @property
-    def _latest_alert(self) -> dict | None:
-        return self.coordinator.data.get("latest_alerts", {}).get(self._physical_id)
-
-    @property
-    def native_value(self) -> str | None:
-        """Return the full authenticated video URL, or None if no alert."""
-        alert = self._latest_alert
-        if not alert or not alert.get("video_url"):
-            return None
-        return self.coordinator.alert_video_url(alert["video_url"], self._physical_id)
-
-    @property
-    def extra_state_attributes(self) -> dict[str, Any]:
-        alert = self._latest_alert
-        if not alert:
-            return {}
-        return {
-            "alert_id": alert.get("id"),
-            "video_duration_seconds": alert.get("video_last"),
-            "video_path": alert.get("video_url"),
-        }

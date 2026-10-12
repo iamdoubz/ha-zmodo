@@ -88,6 +88,7 @@ class ZmodoFrameRateSelect(CoordinatorEntity, SelectEntity):
     def available(self) -> bool:
         return (
             super().available
+            and self.coordinator.legacy_device_available(self._physical_id)
             and self._current_device.get("device_online", "0") == "1"
         )
 
@@ -136,6 +137,7 @@ class ZmodoNightvisionSelect(CoordinatorEntity, SelectEntity):
     def available(self) -> bool:
         return (
             super().available
+            and self.coordinator.legacy_device_available(self._physical_id)
             and self._current_device.get("device_online", "0") == "1"
         )
 
@@ -187,6 +189,7 @@ class ZmodoNightLevelSelect(CoordinatorEntity, SelectEntity):
         dev = self._current_device
         return (
             super().available
+            and self.coordinator.legacy_device_available(self._physical_id)
             and dev.get("device_online", "0") == "1"
             and str(dev.get("nightvision", "1")) == "1"
         )

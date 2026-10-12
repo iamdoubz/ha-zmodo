@@ -12,7 +12,7 @@
 
 A Home Assistant custom integration for **Zmodo / MeShare** cloud cameras.
 
-> **Note:** This integration uses Zmodo's cloud API (the same one the iOS/Android app uses). Your cameras must be connected to the Zmodo/MeShare cloud — local-only setups are not supported.
+> **Note:** This integration uses Zmodo's cloud. Since October 2026 the camera list, motion alerts and live video come from the new **user.zmodo.com** platform; camera settings (microphone, volume, frame rate, night vision, notifications) and the device picture still use the older MeShare app API and become unavailable whenever that API is down. Alert image/clip URLs are Home Assistant paths (e.g. `/api/zmodo/alert/<entry>/<alert>/clip`) that require HA authentication, so they work directly in companion-app notifications. Your cameras must be connected to the Zmodo/MeShare cloud — local-only setups are not supported.
 
 [![Open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=iamdoubz&repository=ha-zmodo&category=Integration)
 
@@ -20,13 +20,13 @@ A Home Assistant custom integration for **Zmodo / MeShare** cloud cameras.
 
 ## ⚡ Features ⚡
 
-- 📷 **Camera entities** — SD and HD stream for each device
+- 📷 **Camera entities** — live SD stream for each device (decrypted and relayed locally by Home Assistant)
 - 🎦 **Camera frame rate** — choose from low to high frame rate to control video quality
 - 🔔 **Motion alert sensors** — last alert timestamp and 24-hour alert count per camera
 - 🔊 **Volume slider** — increase and decrease device volume levels
 - 🎙️ **Microphone switch** — turn your device's microphone on or off
 - 🌙👁️ **Nightvision** — configure on/off/auto with sensitivity settings low/normal/high
-- 🔃 **Automatic token refresh** — silently re-authenticates every 20 minutes using the same mechanism as the mobile app (no captcha, no re-entering credentials)
+- 🔃 **Automatic re-authentication** — renews the platform token before it expires and recovers the legacy session on its own (no captcha, no re-entering credentials)
 - 🔌 **Config flow** — set up from the HA UI with just your email and password
 
 ---
@@ -64,8 +64,7 @@ For each camera discovered on your account, the following entities are created:
 
 | Entity | Type | Description |
 |---|---|---|
-| `camera.<name>_sd` | Camera | Standard definition (480p) live stream |
-| `camera.<name>_hd` | Camera | High definition (1080p) live stream |
+| `camera.<name>_sd` | Camera | Live stream (640×480) |
 | `sensor.<name>_last_alert` | Timestamp | Time of the most recent motion event |
 | `sensor.<name>_alert_count_24h` | Number | Motion alert count in the last 24 hours |
 | `image.<name>_last_alert_image` | Image | Last motion clip image thumbnail |

@@ -82,6 +82,10 @@ class ZmodoNotificationSwitch(CoordinatorEntity, SwitchEntity):
         )
 
     @property
+    def available(self) -> bool:
+        return super().available and self.coordinator.legacy_available
+
+    @property
     def is_on(self) -> bool:
         """Return True when notifications are enabled."""
         return self.coordinator.data.get("notifications_on", True)
@@ -138,6 +142,7 @@ class ZmodoMicrophoneSwitch(CoordinatorEntity, SwitchEntity):
     def available(self) -> bool:
         return (
             super().available
+            and self.coordinator.legacy_device_available(self._physical_id)
             and self._current_device.get("device_online", "0") == "1"
         )
 

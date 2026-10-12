@@ -1,26 +1,37 @@
-"""DataUpdateCoordinator for Zmodo — with proactive token refresh.
+"""DataUpdateCoordinator for Zmodo.
 
-The Zmodo session token (GetSessionId) has a Max-Age of 1440 seconds
-(24 minutes), as confirmed by MITM capture of the refresh_login response.
-We refresh proactively every TOKEN_REFRESH_INTERVAL seconds so the token
-is never stale when a data poll or stream URL is built.
+Hybrid model (Oct 2026):
+
+* **Platform API** (user.zmodo.com, JWT) — source of truth for the camera
+  list, online state, motion alerts and live video. Required.
+* **Legacy MeShare app API** (token + login_cert) — optional. Only used for
+  the settings Zmodo has not exposed on the new platform yet (microphone,
+  volume, frame rate, night vision, notifications) and device pictures. When it fails those entities go unavailable and the
+  integration backs off for LEGACY_RETRY_SECONDS before trying again.
+
+Devices are keyed by serial number, which matches the legacy physical_id,
+so existing entity unique IDs are preserved.
 """
 from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import timedelta
+import time
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import urlencode
-import time
 
+import aiohttp
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .api import ZmodoApi, ZmodoApiError, ZmodoAuthError, stable_client_uuid
 from .const import (
+    ALERT_COUNT_WINDOW_SECONDS,
+    ALERT_FETCH_LIMIT,
     APP_MOP_HOSTS,
     CONF_ALARM_ADDRESSES,
     CONF_APP_ADDRESSES,
@@ -29,40 +40,14 @@ from .const import (
     CONF_MNG_ADDRESSES,
     CONF_TOKEN,
     DOMAIN,
+    LEGACY_RETRY_SECONDS,
     UPDATE_INTERVAL,
 )
+from .platform_api import ZmodoPlatformApi, ZmodoPlatformAuthError, ZmodoPlatformError
 
 _LOGGER = logging.getLogger(__name__)
 
 TOKEN_REFRESH_INTERVAL = 20 * 60  # 20 minutes — 4 min before the 24-min expiry
-
-
-def build_alert_media_url(base: str, path: str, token: str) -> str:
-    """Build a fully-authenticated URL for an alert thumbnail image.
-
-    GET /storage/get_file?token=TOKEN&url=PATH
-    """
-    params = urlencode({"token": token, "url": path})
-    return f"{base}/storage/get_file?{params}"
-
-
-def build_alert_video_url(base: str, path: str, token: str, physical_id: str) -> str:
-    """Build a fully-authenticated URL for an alert video clip.
-
-    Video clips require three extra params beyond the image URL:
-      transcoding=1   — always 1; tells the server to serve as MP4
-      physical_id     — the camera's physical ID
-      _file=alarm.mp4 — forces the filename/extension in the response
-    """
-    params = urlencode({
-        "token": token,
-        "url": path,
-        "transcoding": "1",
-        "physical_id": physical_id,
-        "_file": "alarm.mp4",
-    })
-    return f"{base}/storage/get_file?{params}"
-
 
 
 def build_device_pic_url(base: str, path: str, token: str, physical_id: str) -> str:
@@ -76,12 +61,13 @@ def build_device_pic_url(base: str, path: str, token: str, physical_id: str) -> 
 
 
 class ZmodoCoordinator(DataUpdateCoordinator):
-    """Fetch devices and per-device latest alerts, refreshing the token proactively."""
+    """Poll the platform API, plus the legacy API for settings when it works."""
 
     def __init__(
         self,
         hass: HomeAssistant,
         api: ZmodoApi,
+        platform: ZmodoPlatformApi,
         entry: ConfigEntry,
     ) -> None:
         super().__init__(
@@ -91,9 +77,14 @@ class ZmodoCoordinator(DataUpdateCoordinator):
             update_interval=timedelta(seconds=UPDATE_INTERVAL),
         )
         self._api = api
+        self.platform = platform
         self._entry = entry
 
-        self._token: str = entry.data[CONF_TOKEN]
+        # Legacy MeShare session (optional)
+        self._legacy_ok = False
+        self._legacy_retry_at = 0.0
+        self._legacy_ids: dict[str, str] = {}  # serial -> legacy physical_id
+        self._token: str = entry.data.get(CONF_TOKEN, "")
         self._login_cert: str = entry.data.get(CONF_LOGIN_CERT, "")
         self._client_uuid: str = entry.data.get(CONF_CLIENT_UUID, "")
         self._mng_addresses: list[str] = entry.data.get(CONF_MNG_ADDRESSES, [])
@@ -128,6 +119,8 @@ class ZmodoCoordinator(DataUpdateCoordinator):
             self._refresh_unsub = None
 
     async def _handle_scheduled_refresh(self, _now=None) -> None:
+        if not self._legacy_ok:
+            return  # legacy recovery is handled (with back-off) by the poll
         _LOGGER.debug("Proactive Zmodo token refresh triggered")
         success = await self._refresh_token()
         if not success:
@@ -141,8 +134,30 @@ class ZmodoCoordinator(DataUpdateCoordinator):
 
     @property
     def token(self) -> str:
-        """Return the current session token."""
+        """Return the current legacy session token."""
         return self._token
+
+    @property
+    def entry_id(self) -> str:
+        """Config entry ID (used to build relay paths)."""
+        return self._entry.entry_id
+
+    @property
+    def legacy_available(self) -> bool:
+        """True while the legacy MeShare session is working."""
+        return self._legacy_ok
+
+    def legacy_device_available(self, serial: str) -> bool:
+        """True when settings for this camera can be read/changed."""
+        return self._legacy_ok and serial in self._legacy_ids
+
+    def _legacy_id(self, serial: str) -> str:
+        """Map a serial to the legacy physical_id (normally identical)."""
+        if not self._legacy_ok:
+            raise HomeAssistantError(
+                "Zmodo legacy API is unavailable; this setting cannot be changed right now"
+            )
+        return self._legacy_ids.get(serial, serial)
 
     async def _refresh_token(self) -> bool:
         """Refresh the session token, falling back to a full password login.
@@ -239,17 +254,12 @@ class ZmodoCoordinator(DataUpdateCoordinator):
         """Return the first available app server base URL."""
         return self._app_addresses[0] if self._app_addresses else APP_MOP_HOSTS[0]
 
-    def alert_image_url(self, image_path: str) -> str:
-        """Return a fully-authenticated URL for an alert thumbnail."""
-        return build_alert_media_url(self._alarm_base(), image_path, self._token)
-
-    def alert_video_url(self, video_path: str, physical_id: str) -> str:
-        """Return a fully-authenticated URL for an alert video clip."""
-        return build_alert_video_url(self._alarm_base(), video_path, self._token, physical_id)
-
     def device_pic_url(self, pic_path: str, physical_id: str) -> str:
         """Return a fully-authenticated URL for a device product image."""
-        return build_device_pic_url(self._alarm_base(), pic_path, self._token, physical_id)
+        return build_device_pic_url(
+            self._alarm_base(), pic_path, self._token,
+            self._legacy_ids.get(physical_id, physical_id),
+        )
 
     async def async_set_device_mute(self, physical_id: str, mic_active: bool) -> None:
         """Set microphone state for a device and update coordinator data optimistically.
@@ -257,6 +267,7 @@ class ZmodoCoordinator(DataUpdateCoordinator):
         mic_active=True  → microphone on  (mute field = "1" in device data)
         mic_active=False → microphone off (mute field = "0" in device data)
         """
+        legacy_id = self._legacy_id(physical_id)
         devices = self.data.get("devices", {})
         if physical_id in devices:
             # mute field in device data: "1"=mic on, "0"=mic off
@@ -267,7 +278,7 @@ class ZmodoCoordinator(DataUpdateCoordinator):
         for addr in self._mng_addresses:
             try:
                 await self._api.set_device_mute(
-                    addr, self._token, physical_id, device_type, mic_active
+                    addr, self._token, legacy_id, device_type, mic_active
                 )
                 return
             except ZmodoApiError as exc:
@@ -276,6 +287,7 @@ class ZmodoCoordinator(DataUpdateCoordinator):
 
     async def async_set_device_nightvision(self, physical_id: str, mode: int) -> None:
         """Set night vision mode and update coordinator data optimistically."""
+        legacy_id = self._legacy_id(physical_id)
         devices = self.data.get("devices", {})
         if physical_id in devices:
             devices[physical_id]["nightvision"] = str(mode)
@@ -283,7 +295,7 @@ class ZmodoCoordinator(DataUpdateCoordinator):
 
         for addr in self._mng_addresses:
             try:
-                await self._api.set_device_nightvision(addr, self._token, physical_id, mode)
+                await self._api.set_device_nightvision(addr, self._token, legacy_id, mode)
                 return
             except ZmodoApiError as exc:
                 _LOGGER.debug("set_device_nightvision failed for %s on %s: %s", physical_id, addr, exc)
@@ -291,6 +303,7 @@ class ZmodoCoordinator(DataUpdateCoordinator):
 
     async def async_set_device_night_level(self, physical_id: str, level: int) -> None:
         """Set night vision sensitivity and update coordinator data optimistically."""
+        legacy_id = self._legacy_id(physical_id)
         devices = self.data.get("devices", {})
         if physical_id in devices:
             devices[physical_id]["night_level"] = str(level)
@@ -298,7 +311,7 @@ class ZmodoCoordinator(DataUpdateCoordinator):
 
         for addr in self._mng_addresses:
             try:
-                await self._api.set_device_night_level(addr, self._token, physical_id, level)
+                await self._api.set_device_night_level(addr, self._token, legacy_id, level)
                 return
             except ZmodoApiError as exc:
                 _LOGGER.debug("set_device_night_level failed for %s on %s: %s", physical_id, addr, exc)
@@ -306,6 +319,7 @@ class ZmodoCoordinator(DataUpdateCoordinator):
 
     async def async_set_device_frame_rate(self, physical_id: str, frame_rate: int) -> None:
         """Set the frame rate for a device and update coordinator data optimistically."""
+        legacy_id = self._legacy_id(physical_id)
         devices = self.data.get("devices", {})
         if physical_id in devices:
             devices[physical_id]["frame_rate"] = str(frame_rate)
@@ -313,7 +327,7 @@ class ZmodoCoordinator(DataUpdateCoordinator):
 
         for addr in self._mng_addresses:
             try:
-                await self._api.set_device_frame_rate(addr, self._token, physical_id, frame_rate)
+                await self._api.set_device_frame_rate(addr, self._token, legacy_id, frame_rate)
                 return
             except ZmodoApiError as exc:
                 _LOGGER.debug("set_device_frame_rate failed for %s on %s: %s", physical_id, addr, exc)
@@ -321,6 +335,7 @@ class ZmodoCoordinator(DataUpdateCoordinator):
 
     async def async_set_device_volume(self, physical_id: str, volume: int) -> None:
         """Set the speaker volume for a device and update coordinator data optimistically."""
+        legacy_id = self._legacy_id(physical_id)
         # Optimistic update so the slider snaps to the new value immediately
         devices = self.data.get("devices", {})
         if physical_id in devices:
@@ -329,7 +344,7 @@ class ZmodoCoordinator(DataUpdateCoordinator):
 
         for addr in self._mng_addresses:
             try:
-                await self._api.set_device_volume(addr, self._token, physical_id, volume)
+                await self._api.set_device_volume(addr, self._token, legacy_id, volume)
                 return
             except ZmodoApiError as exc:
                 _LOGGER.debug("set_device_volume failed for %s on %s: %s", physical_id, addr, exc)
@@ -342,6 +357,7 @@ class ZmodoCoordinator(DataUpdateCoordinator):
         the API call so the switch flips immediately in the UI, then persist
         it so future polls carry the correct value without querying the API.
         """
+        self._legacy_id("")  # raises if the legacy session is down
         self._notifications_on = enable
         # Notify listeners immediately so the switch reflects the new state
         self.async_update_listeners()
@@ -350,56 +366,32 @@ class ZmodoCoordinator(DataUpdateCoordinator):
         )
 
     # ------------------------------------------------------------------
-    # Data fetch
+    # Legacy data fetch (best effort)
     # ------------------------------------------------------------------
 
-    async def _fetch_devices(self) -> list[dict]:
-        """Try each mng address; attempt one reactive refresh on auth failure."""
-        last_exc: Exception | None = None
+    async def _fetch_legacy_devices(self) -> list[dict] | None:
+        """Return the legacy device list, or None if the legacy API is down."""
+        if not self._mng_addresses and not await self._refresh_token():
+            return None
 
+        last_exc: Exception | None = None
         for attempt in range(2):
             for addr in self._mng_addresses:
                 try:
                     return await self._api.get_devices(addr, self._token)
-                except ZmodoApiError as exc:
-                    _LOGGER.debug("Device fetch failed for %s: %s", addr, exc)
+                except (ZmodoApiError, aiohttp.ClientError, asyncio.TimeoutError) as exc:
+                    _LOGGER.debug("Legacy device fetch failed for %s: %s", addr, exc)
                     last_exc = exc
+            if attempt == 0 and not await self._refresh_token():
+                break
 
-            if attempt == 0:
-                _LOGGER.info(
-                    "Device list failed on all addresses; attempting reactive token refresh"
-                )
-                refreshed = await self._refresh_token()
-                if not refreshed:
-                    break
-
-        raise UpdateFailed(
-            f"All management addresses failed: {last_exc}"
-        ) from last_exc
-
-    async def _fetch_alerts_for_device(self, physical_id: str) -> list[dict]:
-        """Fetch the full 24h alert list for one device (newest-first).
-
-        Tries each alarm address in order; returns an empty list on total
-        failure so a single bad camera never blocks the whole update.
-        """
-        for addr in self._alarm_addresses:
-            try:
-                return await self._api.get_alerts_for_device(
-                    addr, self._token, physical_id
-                )
-            except ZmodoApiError as exc:
-                _LOGGER.debug(
-                    "Alert fetch for %s failed on %s: %s",
-                    physical_id, addr, exc,
-                )
-        return []
+        _LOGGER.debug("Legacy device list unavailable: %s", last_exc)
+        return None
 
     async def _fetch_storage_list(self) -> dict[str, str]:
         """Fetch pic_url for each device from the storage list endpoint.
 
-        Returns a dict of physical_id -> pic_url.
-        Best-effort — returns empty dict on failure so it never blocks the poll.
+        Returns a dict of legacy physical_id -> pic_url (best effort).
         """
         for addr in self._mng_addresses:
             try:
@@ -409,59 +401,137 @@ class ZmodoCoordinator(DataUpdateCoordinator):
                     for item in items
                     if item.get("physical_id") and item.get("pic_url")
                 }
-            except ZmodoApiError as exc:
+            except (ZmodoApiError, aiohttp.ClientError, asyncio.TimeoutError) as exc:
                 _LOGGER.debug("Storage list failed for %s: %s", addr, exc)
         return {}
 
     async def _fetch_notification_mode(self) -> bool:
-        """Fetch the current notification mode from the server.
-
-        Returns True (ON) or False (OFF). Falls back to the last known
-        in-memory value on failure so a transient error doesn't flip the switch.
-        """
+        """Fetch the current notification mode; keep last state on failure."""
         for addr in self._app_addresses or APP_MOP_HOSTS:
             try:
                 return await self._api.get_notification_mode(addr, self._token)
-            except ZmodoApiError as exc:
+            except (ZmodoApiError, aiohttp.ClientError, asyncio.TimeoutError) as exc:
                 _LOGGER.debug("Notification mode fetch failed for %s: %s", addr, exc)
-        _LOGGER.debug("All notification mode fetches failed; keeping last known state")
         return self._notifications_on
 
-    async def _async_update_data(self) -> dict[str, Any]:
-        """Poll devices, alerts, and device images concurrently."""
-        devices = await self._fetch_devices()
+    async def _fetch_legacy(self) -> dict[str, Any] | None:
+        """Fetch everything the legacy API still provides, or None if it is down."""
+        if self._legacy_retry_at and time.monotonic() < self._legacy_retry_at:
+            return None
 
-        # Fetch alerts and device images concurrently
-        physical_ids = [d["physical_id"] for d in devices]
-        alert_results, device_pics, notifications_on = await asyncio.gather(
-            asyncio.gather(
-                *[self._fetch_alerts_for_device(pid) for pid in physical_ids],
-                return_exceptions=True,
-            ),
+        devices = await self._fetch_legacy_devices()
+        if devices is None:
+            if self._legacy_ok or not self._legacy_retry_at:
+                _LOGGER.warning(
+                    "Zmodo legacy API unavailable; settings entities disabled, "
+                    "retrying in %d minutes",
+                    LEGACY_RETRY_SECONDS // 60,
+                )
+            self._legacy_ok = False
+            self._legacy_retry_at = time.monotonic() + LEGACY_RETRY_SECONDS
+            return None
+
+        if not self._legacy_ok:
+            _LOGGER.info("Zmodo legacy API available; settings entities enabled")
+        self._legacy_ok = True
+        self._legacy_retry_at = 0.0
+
+        device_pics, notifications_on = await asyncio.gather(
             self._fetch_storage_list(),
             self._fetch_notification_mode(),
         )
-
-        # Derive both latest alert and 24h count from the same list
-        latest_alerts: dict[str, dict | None] = {}
-        alert_counts: dict[str, int] = {}
-        for pid, result in zip(physical_ids, alert_results):
-            if isinstance(result, Exception):
-                _LOGGER.debug("Alert fetch for %s raised: %s", pid, result)
-                alerts_list: list[dict] = []
-            else:
-                alerts_list = result  # type: ignore[assignment]
-            latest_alerts[pid] = alerts_list[0] if alerts_list else None
-            alert_counts[pid] = len(alerts_list)
-
-        # Persist fetched state so async_set_notifications optimistic update
-        # is overwritten by truth on the next poll
         self._notifications_on = notifications_on
+        return {"devices": devices, "device_pics": device_pics}
+
+    # ------------------------------------------------------------------
+    # Main poll
+    # ------------------------------------------------------------------
+
+    async def _fetch_platform(self) -> tuple[list[dict], list[dict]]:
+        """Fetch devices and recent alerts from the platform API."""
+        try:
+            await self.platform.ensure_token()
+            devices, alerts = await asyncio.gather(
+                self.platform.get_devices(),
+                self.platform.get_alerts(ALERT_FETCH_LIMIT),
+            )
+        except ZmodoPlatformAuthError as err:
+            raise UpdateFailed(f"Zmodo login rejected: {err}") from err
+        except (ZmodoPlatformError, aiohttp.ClientError, asyncio.TimeoutError) as err:
+            raise UpdateFailed(f"Zmodo platform API error: {err}") from err
+        return devices or [], alerts or []
+
+    @staticmethod
+    def _parse_ts(value: str | None) -> datetime | None:
+        if not value:
+            return None
+        try:
+            dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+    async def _async_update_data(self) -> dict[str, Any]:
+        """Poll the platform API, then merge in legacy settings if available."""
+        platform_devices, alerts = await self._fetch_platform()
+        legacy = await self._fetch_legacy()
+
+        legacy_devices = legacy["devices"] if legacy else []
+        by_id = {d.get("physical_id"): d for d in legacy_devices}
+        by_name = {d.get("device_name"): d for d in legacy_devices}
+
+        devices: dict[str, dict[str, Any]] = {}
+        legacy_ids: dict[str, str] = {}
+        for pd in platform_devices:
+            serial = pd.get("serial")
+            if not serial:
+                continue
+            ld = by_id.get(serial) or by_name.get(pd.get("name")) or {}
+            if ld.get("physical_id"):
+                legacy_ids[serial] = ld["physical_id"]
+            dev = dict(ld)
+            dev.update(
+                physical_id=serial,
+                serial=serial,
+                platform_id=pd.get("id"),
+                device_name=pd.get("name") or ld.get("device_name") or serial,
+                device_online="1" if pd.get("online") else "0",
+                aes_key=pd.get("aes_key") or ld.get("aes_key", ""),
+                product_id=pd.get("product_id"),
+                device_channel=pd.get("device_channel", ld.get("device_channel", 1)),
+                audio=pd.get("audio"),
+            )
+            devices[serial] = dev
+        self._legacy_ids = legacy_ids
+
+        # Platform alerts: newest first; derive latest time + 24h count.
+        cutoff = datetime.now(timezone.utc) - timedelta(seconds=ALERT_COUNT_WINDOW_SECONDS)
+        platform_alerts: dict[str, list[dict]] = {s: [] for s in devices}
+        for alert in alerts:
+            serial = alert.get("serial")
+            if serial in platform_alerts:
+                platform_alerts[serial].append(alert)
+        last_alert_time: dict[str, datetime | None] = {}
+        alert_counts: dict[str, int] = {}
+        for serial, items in platform_alerts.items():
+            times = [t for t in (self._parse_ts(a.get("ts")) for a in items) if t]
+            last_alert_time[serial] = max(times) if times else None
+            alert_counts[serial] = sum(1 for t in times if t >= cutoff)
+
+        # Legacy device pictures, re-keyed by serial
+        to_serial = {lid: serial for serial, lid in legacy_ids.items()}
+        device_pics: dict[str, str] = {}
+        if legacy:
+            for lid, pic in legacy["device_pics"].items():
+                if lid in to_serial:
+                    device_pics[to_serial[lid]] = pic
 
         return {
-            "devices": {d["physical_id"]: d for d in devices},
-            "latest_alerts": latest_alerts,
+            "devices": devices,
+            "platform_alerts": platform_alerts,
+            "last_alert_time": last_alert_time,
             "alert_counts": alert_counts,
-            "device_pics": device_pics,  # physical_id -> pic_url
+            "latest_alerts": {s: (a[0] if a else None) for s, a in platform_alerts.items()},
+            "device_pics": device_pics,
             "notifications_on": self._notifications_on,
         }

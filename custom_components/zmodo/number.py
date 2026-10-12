@@ -82,6 +82,7 @@ class ZmodoVolumeNumber(CoordinatorEntity, NumberEntity):
     def available(self) -> bool:
         return (
             super().available
+            and self.coordinator.legacy_device_available(self._physical_id)
             and self._current_device.get("device_online", "0") == "1"
         )
 

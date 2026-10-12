@@ -34,7 +34,7 @@ LOGIN_PLATFORM = "2"
 LOGIN_CLIENT = "1"          # iOS app sends client=1; web sends client=2
 LOGIN_LANGUAGE = "en"
 LOGIN_APP_VERSION = "5.0"   # app_version field sent by iOS app
-LOGIN_CLIENT_VERSION = "7.1.4"  # client_version sent in refresh
+LOGIN_CLIENT_VERSION = "8.0.6"  # client_version sent in login/refresh (app 8.0.6, Oct 2026)
 
 # Config entry keys
 CONF_TOKEN = "token"
@@ -45,16 +45,22 @@ CONF_APP_ADDRESSES = "app_addresses"
 CONF_ALARM_ADDRESSES = "alarm_addresses"
 CONF_MNG_ADDRESSES = "mng_addresses"
 
+CONF_PLATFORM_USER_ID = "platform_user_id"
+
+# New platform API (user.zmodo.com)
+ALERT_FETCH_LIMIT = 100          # newest N alerts per poll; 24h count is derived from these
+ALERT_COUNT_WINDOW_SECONDS = 86400
+
+# Legacy MeShare API back-off when its login fails (seconds)
+LEGACY_RETRY_SECONDS = 600
+
+# Live relay: cached still image lifetime (seconds)
+SNAPSHOT_CACHE_SECONDS = 30
+
 # Coordinator update interval (seconds)
 UPDATE_INTERVAL = 5
 
 # Alert fetch window (seconds): 24 hours
 ALERT_WINDOW_SECONDS = 86400
 
-# Camera stream base URL
-STREAM_BASE_URL = "https://flv.meshare.com/live"
-
-# media_type values
-STREAM_MEDIA_TYPE_SD = 1
-STREAM_MEDIA_TYPE_HD = 2
 

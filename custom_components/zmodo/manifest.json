@@ -1,12 +1,20 @@
 {
   "domain": "zmodo",
   "name": "Zmodo",
-  "codeowners": ["@iamdoubz"],
+  "codeowners": [
+    "@iamdoubz"
+  ],
   "config_flow": true,
+  "dependencies": [
+    "ffmpeg",
+    "http"
+  ],
   "documentation": "https://github.com/iamdoubz/ha-zmodo",
   "iot_class": "cloud_polling",
   "issue_tracker": "https://github.com/iamdoubz/ha-zmodo/issues",
-  "loggers": ["custom_components.zmodo"],
+  "loggers": [
+    "custom_components.zmodo"
+  ],
   "requirements": [],
   "version": "v2026.10.0"
 }
