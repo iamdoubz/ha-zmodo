@@ -59,6 +59,7 @@ class ZmodoFrame:
     tag: bytes
     timestamp_us: int
     payload: bytes
+    camera_seconds: int = -1  # camera wall clock (seconds since local midnight)
 
     @property
     def is_video(self) -> bool:
@@ -96,7 +97,21 @@ def parse_frame(message: bytes, aes_key: str) -> ZmodoFrame:
     payload = message[HEADER_LEN:HEADER_LEN + length]
     if tag == TAG_KEYFRAME:
         payload = decrypt_keyframe(payload, aes_key)
-    return ZmodoFrame(tag, ts_us, payload)
+    h, m, sec = message[8], message[9], message[10]
+    camera_seconds = h * 3600 + m * 60 + sec if h < 24 and m < 60 and sec < 60 else -1
+    return ZmodoFrame(tag, ts_us, payload, camera_seconds)
+
+
+def camera_clock_delay(camera_seconds: int, local_seconds: float) -> float | None:
+    """Seconds between the camera's on-screen clock and local time (midnight-safe).
+
+    Assumes the camera and Home Assistant use the same time zone; returns None
+    for an implausible difference (e.g. a camera set to another zone).
+    """
+    if camera_seconds < 0:
+        return None
+    diff = (local_seconds - camera_seconds + 43200) % 86400 - 43200
+    return diff if -60 < diff < 600 else None
 
 
 def split_annexb(data: bytes) -> list[bytes]:
@@ -240,12 +255,16 @@ class LiveHub:
         serial: str,
         aes_key: str = "",
         create_task=None,
+        local_clock=None,
     ) -> None:
         self._http = session
         self._platform = platform
         self.serial = serial
         self.aes_key = aes_key
         self._create_task = create_task or asyncio.get_running_loop().create_task
+        # Returns local seconds since midnight (HA's time zone); for diagnostics.
+        self._local_clock = local_clock
+        self.camera_delay: float | None = None  # smoothed end-to-Zmodo delay
         self._subs: set[_Subscriber] = set()
         self._muxer = FlvMuxer()
         self._gop: list[bytes] = []
@@ -447,11 +466,19 @@ class LiveHub:
             if wall0 is None:
                 wall0, ts0 = now, frame.timestamp_us
             lag = (now - wall0) - (frame.timestamp_us - ts0) / 1e6
+            if self._local_clock is not None:
+                delay = camera_clock_delay(frame.camera_seconds, self._local_clock())
+                if delay is not None:
+                    self.camera_delay = (
+                        delay if self.camera_delay is None
+                        else 0.9 * self.camera_delay + 0.1 * delay
+                    )
             if now - last_log > 30:
                 last_log = now
                 _LOGGER.debug(
-                    "Zmodo %s: %d client(s), delivery lag %.1fs",
+                    "Zmodo %s: %d client(s), delivery lag %.1fs, camera clock delay %s",
                     self.serial, len(self._subs), lag,
+                    "n/a" if self.camera_delay is None else f"{self.camera_delay:.1f}s",
                 )
             if lag > LAG_RESTART_SECONDS:
                 self.lag_restarts += 1

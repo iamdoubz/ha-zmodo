@@ -25,6 +25,7 @@ from aiohttp import web
 from homeassistant.components.http import KEY_AUTHENTICATED, HomeAssistantView
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from homeassistant.util import dt as dt_util
 
 from .const import DOMAIN
 from .platform_api import alert_media_path
@@ -69,9 +70,20 @@ def get_live_hub(hass: HomeAssistant, coordinator, serial: str, aes_key: str) ->
             create_task=lambda coro: hass.async_create_background_task(
                 coro, f"zmodo live {serial}"
             ),
+            local_clock=_local_seconds,
         )
         hubs[key] = hub
     return hub
+
+
+def _local_seconds() -> float:
+    now = dt_util.now()
+    return now.hour * 3600 + now.minute * 60 + now.second + now.microsecond / 1e6
+
+
+def find_live_hub(hass: HomeAssistant, entry_id: str, serial: str) -> LiveHub | None:
+    """Return the camera's hub if one exists (no side effects)."""
+    return hass.data.get(HUBS, {}).get((entry_id, serial))
 
 
 async def async_stop_live_hubs(hass: HomeAssistant, entry_id: str) -> None:

@@ -20,7 +20,12 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN, SNAPSHOT_CACHE_SECONDS
 from .coordinator import ZmodoCoordinator
-from .relay import alert_media_loopback_url, alert_media_relay_path, relay_url
+from .relay import (
+    alert_media_loopback_url,
+    alert_media_relay_path,
+    find_live_hub,
+    relay_url,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -111,6 +116,21 @@ class ZmodoCamera(CoordinatorEntity, Camera):
             "platform_id": dev.get("platform_id"),
             "product_id": dev.get("product_id"),
             "quality": "SD",
+            "viewers": 0,
+            "zmodo_delay_seconds": None,
+        } | self._hub_attributes()
+
+    def _hub_attributes(self) -> dict[str, Any]:
+        hub = find_live_hub(self.hass, self._entry_id, self._physical_id)
+        if hub is None:
+            return {}
+        return {
+            "viewers": hub.client_count,
+            # Camera on-screen clock vs HA clock as frames arrive from Zmodo:
+            # the part of the delay that happens before Home Assistant.
+            "zmodo_delay_seconds": (
+                round(hub.camera_delay, 1) if hub.camera_delay is not None and hub.client_count else None
+            ),
         }
 
     async def stream_source(self) -> str | None:
