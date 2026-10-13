@@ -65,6 +65,18 @@ def jwt_expiry(token: str) -> float:
         return 0.0
 
 
+async def _error_text(resp: aiohttp.ClientResponse, limit: int = 200) -> str:
+    """Short, log-friendly error body (HTML error pages reduced to their title)."""
+    try:
+        text = await resp.text()
+    except Exception:  # noqa: BLE001
+        return ""
+    title = re.search(r"<title>(.*?)</title>", text, re.I | re.S)
+    if title:
+        return title.group(1).strip()[:limit]
+    return re.sub(r"\s+", " ", text).strip()[:limit]
+
+
 def alert_media_path(alert_id: str, kind: str) -> str:
     """Return the API path for an alert's image or clip (validated)."""
     if kind not in ALERT_MEDIA_KINDS or not _ALERT_ID_RE.fullmatch(alert_id or ""):
@@ -103,11 +115,11 @@ class ZmodoPlatformApi:
         ) as resp:
             if resp.status in (400, 401, 403):
                 raise ZmodoPlatformAuthError(
-                    f"Login rejected ({resp.status}): {await resp.text()}"
+                    f"Login rejected ({resp.status}): {await _error_text(resp)}"
                 )
             if resp.status >= 300:
                 raise ZmodoPlatformError(
-                    f"Login failed ({resp.status}): {await resp.text()}"
+                    f"Login failed ({resp.status}): {await _error_text(resp)}"
                 )
             data = await resp.json(content_type=None)
 
@@ -159,7 +171,7 @@ class ZmodoPlatformApi:
                 )
             if resp.status >= 300:
                 raise ZmodoPlatformError(
-                    f"{method} {path} failed ({resp.status}): {await resp.text()}"
+                    f"{method} {path} failed ({resp.status}): {await _error_text(resp)}"
                 )
             return await resp.json(content_type=None)
 

@@ -141,22 +141,30 @@ class ZmodoLiveRelayView(HomeAssistantView):
             return web.Response(status=404)
 
         hub = get_live_hub(self.hass, coordinator, serial, device.get("aes_key", ""))
-        response = web.StreamResponse(
-            headers={"Content-Type": "video/x-flv", "Cache-Control": "no-store"}
-        )
-        await response.prepare(request)
         stream = hub.stream()
-        try:
-            async with contextlib.aclosing(stream):
+        async with contextlib.aclosing(stream):
+            # Wait for real video before answering, so a failed camera
+            # session is a clean 503 rather than an empty/invalid FLV.
+            try:
+                first = await anext(stream)
+            except (StopAsyncIteration, asyncio.TimeoutError):
+                return web.Response(status=503, text="Camera stream unavailable")
+
+            response = web.StreamResponse(
+                headers={"Content-Type": "video/x-flv", "Cache-Control": "no-store"}
+            )
+            await response.prepare(request)
+            try:
+                await response.write(first)
                 async for chunk in stream:
                     await response.write(chunk)
-        except (ConnectionResetError, asyncio.CancelledError):
-            _LOGGER.debug("Relay client for %s disconnected", serial)
-        except asyncio.TimeoutError:
-            _LOGGER.debug("Zmodo live stream for %s stalled", serial)
-        except Exception as err:  # noqa: BLE001
-            _LOGGER.warning("Zmodo live relay for %s failed: %s", serial, err)
-        return response
+            except (ConnectionResetError, asyncio.CancelledError):
+                _LOGGER.debug("Relay client for %s disconnected", serial)
+            except asyncio.TimeoutError:
+                _LOGGER.debug("Zmodo live stream for %s stalled", serial)
+            except Exception as err:  # noqa: BLE001
+                _LOGGER.warning("Zmodo live relay for %s failed: %s", serial, err)
+            return response
 
 
 class ZmodoAlertMediaView(HomeAssistantView):

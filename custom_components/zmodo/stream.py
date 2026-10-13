@@ -216,16 +216,18 @@ SUB_QUEUE_MAX = 60          # ~6 s at 10 fps; beyond this a client skips to the 
 GOP_CACHE_MAX = SUB_QUEUE_MAX - 2  # frames kept since the last keyframe for instant joins
 LAG_RESTART_SECONDS = 10.0  # frames arriving this far behind the camera clock -> new session
 IDLE_GRACE_SECONDS = 5.0    # keep the upstream session briefly after the last client leaves
-RETRY_DELAY_SECONDS = 3.0
+RETRY_DELAY_SECONDS = 3.0   # first retry; doubles per consecutive failure
+RETRY_DELAY_MAX = 60.0
 
 
 class _Subscriber:
-    __slots__ = ("queue", "skip_to_key")
+    __slots__ = ("queue", "skip_to_key", "delivered")
 
     def __init__(self) -> None:
         self.queue: asyncio.Queue[bytes | None] = asyncio.Queue(maxsize=SUB_QUEUE_MAX)
         # True until the client is positioned on config + keyframe
         self.skip_to_key = True
+        self.delivered = False
 
 
 class LiveHub:
@@ -251,11 +253,20 @@ class LiveHub:
         self._stop_handle: asyncio.TimerHandle | None = None
         self.sessions_opened = 0
         self.lag_restarts = 0
+        self._got_frames = False
+        self._failures = 0          # consecutive failed upstream attempts (persists across viewers)
+        self._next_attempt = 0.0    # loop time before which Zmodo is not retried
 
     # -- client side ---------------------------------------------------
 
     async def stream(self) -> AsyncIterator[bytes]:
         """Yield FLV bytes for one client, starting at the latest keyframe."""
+        if (
+            self._failures
+            and not self._gop
+            and asyncio.get_running_loop().time() < self._next_attempt
+        ):
+            return  # backing off after Zmodo errors: fail fast, don't call Zmodo
         sub = _Subscriber()
         if self._muxer.config_tag and self._gop:
             # Join mid-stream: config + cached GOP (starts with a keyframe),
@@ -268,11 +279,15 @@ class LiveHub:
         self._cancel_stop()
         self._ensure_running()
         try:
-            yield FLV_FILE_HEADER
             while True:
                 item = await asyncio.wait_for(sub.queue.get(), timeout=WS_IDLE_TIMEOUT)
                 if item is None:
                     return
+                if not sub.delivered:
+                    # FLV header only once real video exists, so a relay can
+                    # still answer with an HTTP error if the camera never starts.
+                    sub.delivered = True
+                    item = FLV_FILE_HEADER + item
                 yield item
         finally:
             self._subs.discard(sub)
@@ -320,16 +335,47 @@ class LiveHub:
 
     # -- upstream ------------------------------------------------------
 
+    def _backoff(self) -> float:
+        return min(RETRY_DELAY_MAX, RETRY_DELAY_SECONDS * 2 ** max(0, self._failures - 1))
+
     async def _run(self) -> None:
+        loop = asyncio.get_running_loop()
         while self._subs:
+            wait = self._next_attempt - loop.time()
+            if wait > 0:
+                await asyncio.sleep(wait)
+                if not self._subs:
+                    break
+            self._got_frames = False
             try:
                 await self._pump()
             except asyncio.CancelledError:
                 raise
             except Exception as err:  # noqa: BLE001
-                _LOGGER.warning("Zmodo live stream for %s failed: %s", self.serial, err)
-            if self._subs:
-                await asyncio.sleep(RETRY_DELAY_SECONDS)
+                if self._got_frames:
+                    self._failures = 0
+                self._failures += 1
+                delay = self._backoff()
+                log = _LOGGER.warning if self._failures in (1, 5) else _LOGGER.debug
+                log(
+                    "Zmodo live stream for %s failed (attempt %d, retrying in %.0fs): %s",
+                    self.serial, self._failures, delay, err,
+                )
+                # Clients still waiting for their first frame get a clean
+                # failure now instead of an empty stream later.
+                for sub in list(self._subs):
+                    if not sub.delivered and sub.queue.empty():
+                        self._push(sub, None)
+            else:
+                if self._got_frames:
+                    if self._failures:
+                        _LOGGER.info("Zmodo live stream for %s recovered", self.serial)
+                    self._failures = 0
+                    delay = RETRY_DELAY_SECONDS
+                else:
+                    self._failures += 1   # session ended without any video
+                    delay = self._backoff()
+            self._next_attempt = loop.time() + delay
         self._gop.clear()
 
     async def _pump(self) -> None:
@@ -394,6 +440,7 @@ class LiveHub:
                 _LOGGER.debug("Zmodo live session for %s ended: %s", self.serial, msg.type)
                 return
             frame = parse_frame(msg.data, self.aes_key)
+            self._got_frames = True
 
             # Lag watchdog: compare arrival time with the camera clock.
             now = loop.time()

@@ -92,7 +92,8 @@ class ZmodoCamera(CoordinatorEntity, Camera):
 
     @property
     def name(self) -> str:
-        return f"{self._current_device.get('device_name', self._physical_id)} (SD)"
+        # has_entity_name: HA prefixes the device name ("Living Room SD")
+        return "SD"
 
     @property
     def available(self) -> bool:
