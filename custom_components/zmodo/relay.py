@@ -27,7 +27,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.util import dt as dt_util
 
-from .const import DOMAIN
+from .const import CONF_LOCAL_STREAMS, DOMAIN, OPT_LOCAL_HD, OPT_LOCAL_HOST
 from .platform_api import alert_media_path
 from .stream import LiveHub
 
@@ -62,6 +62,7 @@ def get_live_hub(hass: HomeAssistant, coordinator, serial: str, aes_key: str) ->
     key = (coordinator.entry_id, serial)
     hub = hubs.get(key)
     if hub is None:
+        local_host, local_hd = _local_stream_config(hass, coordinator.entry_id, serial)
         hub = LiveHub(
             async_get_clientsession(hass),
             coordinator.platform,
@@ -71,9 +72,21 @@ def get_live_hub(hass: HomeAssistant, coordinator, serial: str, aes_key: str) ->
                 coro, f"zmodo live {serial}"
             ),
             local_clock=_local_seconds,
+            local_host=local_host,
+            local_hd=local_hd,
         )
         hubs[key] = hub
     return hub
+
+
+def _local_stream_config(
+    hass: HomeAssistant, entry_id: str, serial: str
+) -> tuple[str | None, bool]:
+    """Return (host, hd) for a camera's optional direct-LAN stream."""
+    entry = hass.config_entries.async_get_entry(entry_id)
+    cfg = (entry.options.get(CONF_LOCAL_STREAMS, {}) if entry else {}).get(serial) or {}
+    host = (cfg.get(OPT_LOCAL_HOST) or "").strip() or None
+    return host, bool(cfg.get(OPT_LOCAL_HD, True))
 
 
 def _local_seconds() -> float:
