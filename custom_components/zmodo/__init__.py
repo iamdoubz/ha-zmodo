@@ -12,7 +12,7 @@ from .api import ZmodoApi
 from .const import DOMAIN
 from .coordinator import ZmodoCoordinator
 from .platform_api import ZmodoPlatformApi
-from .relay import async_register_relay
+from .relay import async_register_relay, async_stop_live_hubs
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -49,6 +49,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     coordinator: ZmodoCoordinator | None = hass.data.get(DOMAIN, {}).get(entry.entry_id)
     if coordinator:
         await coordinator.async_shutdown()
+    await async_stop_live_hubs(hass, entry.entry_id)
 
     if unload_ok := await hass.config_entries.async_unload_platforms(entry, PLATFORMS):
         hass.data.get(DOMAIN, {}).pop(entry.entry_id, None)

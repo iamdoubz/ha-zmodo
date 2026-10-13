@@ -9,6 +9,7 @@ Known endpoints (from browser DevTools on user.zmodo.com):
   GET  /api/platform/v1/alerts?limit=N -> [ {id, device_id, serial, reason, ts, has_image, ...} ]
   POST /api/gateway/sessions/live      {"serial", "relayToken": <access_token>}
        -> {session, playlist: wss://.../media/sessions/<id>/stream, audio}
+  DELETE /api/gateway/sessions/<session> -> {"message": "This viewing session has ended."}
   GET  /api/platform/v1/alerts/<id>/image -> image bytes
   GET  /api/platform/v1/alerts/<id>/clip  -> video/mp4
 
@@ -37,6 +38,7 @@ LOGIN_PATH = "/api/platform/v1/auth/login"
 DEVICES_PATH = "/api/platform/v1/device"
 ALERTS_PATH = "/api/platform/v1/alerts"
 LIVE_SESSION_PATH = "/api/gateway/sessions/live"
+SESSION_PATH = "/api/gateway/sessions/{session}"
 ALERT_MEDIA_PATH = "/api/platform/v1/alerts/{alert_id}/{kind}"
 ALERT_MEDIA_KINDS = ("image", "clip")
 _ALERT_ID_RE = re.compile(r"[A-Za-z0-9-]{1,64}")
@@ -179,6 +181,18 @@ class ZmodoPlatformApi:
             LIVE_SESSION_PATH,
             json_body={"serial": serial, "relayToken": token},
         )
+
+    async def end_live_session(self, session_id: str) -> None:
+        """End a live session (what the website does when playback stops)."""
+        if not session_id or not _ALERT_ID_RE.fullmatch(session_id):
+            return
+        token = await self.ensure_token()
+        async with self._session.delete(
+            f"{self._base}{SESSION_PATH.format(session=session_id)}",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=aiohttp.ClientTimeout(total=5),
+        ) as resp:
+            _LOGGER.debug("Ended live session %s… (%s)", session_id[:8], resp.status)
 
     @asynccontextmanager
     async def open_media(

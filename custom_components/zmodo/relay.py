@@ -15,6 +15,7 @@ by loopback consumers such as ffmpeg.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hmac
 import logging
 import secrets
@@ -27,12 +28,13 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .const import DOMAIN
 from .platform_api import alert_media_path
-from .stream import iter_live_flv
+from .stream import LiveHub
 
 _LOGGER = logging.getLogger(__name__)
 
 RELAY_KEY = f"{DOMAIN}_relay_key"
 RELAY_REGISTERED = f"{DOMAIN}_relay_registered"
+HUBS = f"{DOMAIN}_live_hubs"
 _PASS_HEADERS = ("Content-Type", "Content-Length", "Content-Range", "Accept-Ranges",
                  "Last-Modified", "ETag")
 
@@ -51,6 +53,32 @@ def async_register_relay(hass: HomeAssistant) -> None:
     hass.http.register_view(ZmodoLiveRelayView(hass))
     hass.http.register_view(ZmodoAlertMediaView(hass))
     hass.data[RELAY_REGISTERED] = True
+
+
+def get_live_hub(hass: HomeAssistant, coordinator, serial: str, aes_key: str) -> LiveHub:
+    """Return the shared live hub for one camera (one Zmodo session for all viewers)."""
+    hubs: dict[tuple[str, str], LiveHub] = hass.data.setdefault(HUBS, {})
+    key = (coordinator.entry_id, serial)
+    hub = hubs.get(key)
+    if hub is None:
+        hub = LiveHub(
+            async_get_clientsession(hass),
+            coordinator.platform,
+            serial,
+            aes_key,
+            create_task=lambda coro: hass.async_create_background_task(
+                coro, f"zmodo live {serial}"
+            ),
+        )
+        hubs[key] = hub
+    return hub
+
+
+async def async_stop_live_hubs(hass: HomeAssistant, entry_id: str) -> None:
+    """Stop every live hub of a config entry (ends their Zmodo sessions)."""
+    hubs: dict[tuple[str, str], LiveHub] = hass.data.get(HUBS, {})
+    for key in [k for k in hubs if k[0] == entry_id]:
+        await hubs.pop(key).async_stop()
 
 
 def _loopback_base(hass: HomeAssistant) -> str:
@@ -112,24 +140,22 @@ class ZmodoLiveRelayView(HomeAssistantView):
         if device is None:
             return web.Response(status=404)
 
+        hub = get_live_hub(self.hass, coordinator, serial, device.get("aes_key", ""))
         response = web.StreamResponse(
             headers={"Content-Type": "video/x-flv", "Cache-Control": "no-store"}
         )
         await response.prepare(request)
+        stream = hub.stream()
         try:
-            async for chunk in iter_live_flv(
-                async_get_clientsession(self.hass),
-                coordinator.platform,
-                serial,
-                device.get("aes_key", ""),
-            ):
-                await response.write(chunk)
+            async with contextlib.aclosing(stream):
+                async for chunk in stream:
+                    await response.write(chunk)
         except (ConnectionResetError, asyncio.CancelledError):
             _LOGGER.debug("Relay client for %s disconnected", serial)
         except asyncio.TimeoutError:
             _LOGGER.debug("Zmodo live stream for %s stalled", serial)
         except Exception as err:  # noqa: BLE001
-            _LOGGER.warning("Zmodo live stream for %s failed: %s", serial, err)
+            _LOGGER.warning("Zmodo live relay for %s failed: %s", serial, err)
         return response
 
 
