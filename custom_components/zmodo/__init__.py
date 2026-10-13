@@ -41,7 +41,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     async_register_relay(hass)
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    # Reload on options change so the local-stream config takes effect (live
+    # hubs are stopped on unload and rebuilt with the new per-camera settings).
+    entry.async_on_unload(entry.add_update_listener(_async_reload_entry))
     return True
+
+
+async def _async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Reload the entry when its options change."""
+    await hass.config_entries.async_reload(entry.entry_id)
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:

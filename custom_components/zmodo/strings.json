@@ -18,5 +18,17 @@
     "abort": {
       "already_configured": "This Zmodo account is already configured."
     }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Local (LAN) streaming",
+        "description": "For each camera, enter its LAN IP address to stream live video directly from the camera (~1 s latency, HD-capable) instead of via the Zmodo cloud. Leave an IP blank to keep using the cloud. The cloud is always used as an automatic fallback when the camera is off-LAN. Cameras: {cameras}",
+        "data": {}
+      }
+    },
+    "abort": {
+      "no_cameras": "No cameras are available yet. Finish setup and try again once your cameras appear."
+    }
   }
 }

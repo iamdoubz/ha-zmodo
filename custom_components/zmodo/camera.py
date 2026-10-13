@@ -116,6 +116,7 @@ class ZmodoCamera(CoordinatorEntity, Camera):
             "platform_id": dev.get("platform_id"),
             "product_id": dev.get("product_id"),
             "quality": "SD",
+            "stream_source": None,   # "local" or "cloud" while streaming
             "viewers": 0,
             "zmodo_delay_seconds": None,
         } | self._hub_attributes()
@@ -124,7 +125,11 @@ class ZmodoCamera(CoordinatorEntity, Camera):
         hub = find_live_hub(self.hass, self._entry_id, self._physical_id)
         if hub is None:
             return {}
+        # The local path can serve HD; the cloud path is SD only.
+        quality = "HD" if (hub.local_host and hub.local_hd) else "SD"
         return {
+            "quality": quality,
+            "stream_source": hub.active_source,
             "viewers": hub.client_count,
             # Camera on-screen clock vs HA clock as frames arrive from Zmodo:
             # the part of the delay that happens before Home Assistant.

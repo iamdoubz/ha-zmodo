@@ -33,6 +33,8 @@ import aiohttp
 
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
+from . import local_stream
+
 _LOGGER = logging.getLogger(__name__)
 
 HEADER_LEN = 32
@@ -256,11 +258,18 @@ class LiveHub:
         aes_key: str = "",
         create_task=None,
         local_clock=None,
+        local_host: str | None = None,
+        local_hd: bool = True,
     ) -> None:
         self._http = session
         self._platform = platform
         self.serial = serial
         self.aes_key = aes_key
+        # When set, pull video directly from the camera over the LAN (port 8000)
+        # instead of the cloud; cloud stays the automatic fallback.
+        self.local_host = local_host
+        self.local_hd = local_hd
+        self.active_source: str | None = None  # "local" or "cloud" while streaming
         self._create_task = create_task or asyncio.get_running_loop().create_task
         # Returns local seconds since midnight (HA's time zone); for diagnostics.
         self._local_clock = local_clock
@@ -398,7 +407,53 @@ class LiveHub:
         self._gop.clear()
 
     async def _pump(self) -> None:
-        """Run one upstream session until it ends, stalls or lags."""
+        """Run one upstream session (local LAN if configured, else cloud).
+
+        A local path that never produces a frame (camera off-LAN / refused)
+        falls back to the cloud within the same attempt; a local path that was
+        working and then dropped re-raises, so the retry loop reconnects locally
+        rather than thrashing to the cloud.
+        """
+        if self.local_host:
+            try:
+                await self._pump_local()
+                return
+            except asyncio.CancelledError:
+                raise
+            except Exception as err:  # noqa: BLE001
+                if self._got_frames:
+                    raise
+                _LOGGER.info(
+                    "Local stream for %s unavailable (%s); falling back to cloud",
+                    self.serial, err,
+                )
+        await self._pump_cloud()
+
+    async def _pump_local(self) -> None:
+        """Pull one live session straight from the camera over the LAN."""
+        self.active_source = "local"
+        self.sessions_opened += 1
+        self._muxer.new_source()
+        self._gop.clear()
+
+        def _remember_key(key: str) -> None:
+            self.aes_key = key
+
+        frames = local_stream.stream_local(
+            self.local_host,
+            self.aes_key,
+            hd=self.local_hd,
+            on_key=_remember_key,
+        )
+        try:
+            await self._consume(frames.__anext__)
+        finally:
+            self.active_source = None
+            await frames.aclose()
+
+    async def _pump_cloud(self) -> None:
+        """Run one cloud upstream session until it ends, stalls or lags."""
+        self.active_source = "cloud"
         live = await self._platform.start_live_session(self.serial)
         session_id = live.get("session", "")
         url = live.get("playlist")
@@ -419,7 +474,7 @@ class LiveHub:
             )
             _LOGGER.debug("Zmodo live session opened for %s", self.serial)
             try:
-                await self._read_ws(ws)
+                await self._consume(self._ws_reader(ws))
             finally:
                 # End the session before closing the socket, as the website
                 # does, so the server stops sending promptly.
@@ -427,6 +482,7 @@ class LiveHub:
                 await asyncio.shield(self._end_session(session_id))
                 await self._close_ws(ws)
         finally:
+            self.active_source = None
             if not ended:
                 await asyncio.shield(self._end_session(session_id))
 
@@ -442,23 +498,45 @@ class LiveHub:
         except (asyncio.TimeoutError, Exception):  # noqa: BLE001
             pass
 
-    async def _read_ws(self, ws: aiohttp.ClientWebSocketResponse) -> None:
+    def _ws_reader(self, ws: aiohttp.ClientWebSocketResponse):
+        """Message source for the cloud WebSocket: yields raw media frames.
+
+        The leading TEXT config message updates the AES key in place; a
+        non-binary message signals the session end (returns None).
+        """
+        async def next_message() -> bytes | None:
+            while True:
+                msg = await asyncio.wait_for(ws.receive(), timeout=WS_IDLE_TIMEOUT)
+                if msg.type == aiohttp.WSMsgType.TEXT:
+                    try:
+                        self.aes_key = parse_config(msg.data).get("aesKey") or self.aes_key
+                    except ValueError:
+                        _LOGGER.debug("Ignoring text message: %s", msg.data[:200])
+                    continue
+                if msg.type != aiohttp.WSMsgType.BINARY:
+                    _LOGGER.debug(
+                        "Zmodo live session for %s ended: %s", self.serial, msg.type
+                    )
+                    return None
+                return msg.data
+        return next_message
+
+    async def _consume(self, next_message) -> None:
+        """Drive one upstream session: parse, watch for lag, mux, fan out.
+
+        ``next_message`` is a zero-arg coroutine returning the next raw media
+        frame (32-byte header + payload) or None when the session ends. Used by
+        both the cloud WebSocket and the local LAN reader.
+        """
         wall0: float | None = None
         ts0 = 0
         last_log = 0.0
         loop = asyncio.get_running_loop()
         while self._subs:
-            msg = await asyncio.wait_for(ws.receive(), timeout=WS_IDLE_TIMEOUT)
-            if msg.type == aiohttp.WSMsgType.TEXT:
-                try:
-                    self.aes_key = parse_config(msg.data).get("aesKey") or self.aes_key
-                except ValueError:
-                    _LOGGER.debug("Ignoring text message: %s", msg.data[:200])
-                continue
-            if msg.type != aiohttp.WSMsgType.BINARY:
-                _LOGGER.debug("Zmodo live session for %s ended: %s", self.serial, msg.type)
+            msg = await next_message()
+            if msg is None:
                 return
-            frame = parse_frame(msg.data, self.aes_key)
+            frame = parse_frame(msg, self.aes_key)
             self._got_frames = True
 
             # Lag watchdog: compare arrival time with the camera clock.

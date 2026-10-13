@@ -8,6 +8,7 @@ import aiohttp
 import voluptuous as vol
 
 from homeassistant import config_entries
+from homeassistant.core import callback
 from homeassistant.data_entry_flow import FlowResult
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
@@ -17,12 +18,15 @@ from .const import (
     CONF_ALARM_ADDRESSES,
     CONF_APP_ADDRESSES,
     CONF_CLIENT_UUID,
+    CONF_LOCAL_STREAMS,
     CONF_LOGIN_CERT,
     CONF_MNG_ADDRESSES,
     CONF_PLATFORM_USER_ID,
     CONF_TOKEN,
     CONF_USER_ID,
     DOMAIN,
+    OPT_LOCAL_HD,
+    OPT_LOCAL_HOST,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -39,6 +43,13 @@ class ZmodoConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Single-step config flow: email + password → done."""
 
     VERSION = 1
+
+    @staticmethod
+    @callback
+    def async_get_options_flow(
+        config_entry: config_entries.ConfigEntry,
+    ) -> "ZmodoOptionsFlow":
+        return ZmodoOptionsFlow(config_entry)
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
@@ -103,4 +114,67 @@ class ZmodoConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             step_id="user",
             data_schema=STEP_USER_SCHEMA,
             errors=errors,
+        )
+
+
+class ZmodoOptionsFlow(config_entries.OptionsFlow):
+    """Per-camera options: direct-LAN stream host + HD/SD, for low-latency local view."""
+
+    def __init__(self, config_entry: config_entries.ConfigEntry) -> None:
+        # Private attr, not self.config_entry: recent HA provides that as a
+        # read-only property and assigning it is deprecated.
+        self._entry = config_entry
+
+    def _cameras(self) -> list[tuple[str, str]]:
+        """(serial, label) for each camera, from the running coordinator."""
+        coordinator = self.hass.data.get(DOMAIN, {}).get(self._entry.entry_id)
+        data = getattr(coordinator, "data", None) or {}
+        out = []
+        for serial, dev in data.get("devices", {}).items():
+            out.append((serial, dev.get("device_name") or serial))
+        return out
+
+    async def async_step_init(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        cameras = self._cameras()
+        current: dict[str, Any] = dict(
+            self._entry.options.get(CONF_LOCAL_STREAMS, {})
+        )
+
+        if user_input is not None:
+            local: dict[str, Any] = {}
+            for serial, _ in cameras:
+                host = (user_input.get(f"{serial}__host") or "").strip()
+                if host:
+                    local[serial] = {
+                        OPT_LOCAL_HOST: host,
+                        OPT_LOCAL_HD: bool(user_input.get(f"{serial}__hd", True)),
+                    }
+            return self.async_create_entry(
+                title="", data={CONF_LOCAL_STREAMS: local}
+            )
+
+        if not cameras:
+            return self.async_abort(reason="no_cameras")
+
+        fields: dict[Any, Any] = {}
+        for serial, label in cameras:
+            cam = current.get(serial, {})
+            fields[
+                vol.Optional(
+                    f"{serial}__host",
+                    description={"suggested_value": cam.get(OPT_LOCAL_HOST, "")},
+                )
+            ] = str
+            fields[
+                vol.Optional(f"{serial}__hd", default=cam.get(OPT_LOCAL_HD, True))
+            ] = bool
+
+        return self.async_show_form(
+            step_id="init",
+            data_schema=vol.Schema(fields),
+            description_placeholders={
+                "cameras": ", ".join(label for _, label in cameras)
+            },
         )
