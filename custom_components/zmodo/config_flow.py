@@ -25,7 +25,6 @@ from .const import (
     CONF_TOKEN,
     CONF_USER_ID,
     DOMAIN,
-    OPT_LOCAL_HD,
     OPT_LOCAL_HOST,
 )
 
@@ -118,7 +117,11 @@ class ZmodoConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
 
 class ZmodoOptionsFlow(config_entries.OptionsFlow):
-    """Per-camera options: direct-LAN stream host + HD/SD, for low-latency local view."""
+    """Per-camera options: direct-LAN stream host, for low-latency local view.
+
+    Setting a host enables the fast local path for the SD entity and adds a
+    local-only HD entity for that camera.
+    """
 
     def __init__(self, config_entry: config_entries.ConfigEntry) -> None:
         # Private attr, not self.config_entry: recent HA provides that as a
@@ -147,10 +150,7 @@ class ZmodoOptionsFlow(config_entries.OptionsFlow):
             for serial, _ in cameras:
                 host = (user_input.get(f"{serial}__host") or "").strip()
                 if host:
-                    local[serial] = {
-                        OPT_LOCAL_HOST: host,
-                        OPT_LOCAL_HD: bool(user_input.get(f"{serial}__hd", True)),
-                    }
+                    local[serial] = {OPT_LOCAL_HOST: host}
             return self.async_create_entry(
                 title="", data={CONF_LOCAL_STREAMS: local}
             )
@@ -167,9 +167,6 @@ class ZmodoOptionsFlow(config_entries.OptionsFlow):
                     description={"suggested_value": cam.get(OPT_LOCAL_HOST, "")},
                 )
             ] = str
-            fields[
-                vol.Optional(f"{serial}__hd", default=cam.get(OPT_LOCAL_HD, True))
-            ] = bool
 
         return self.async_show_form(
             step_id="init",

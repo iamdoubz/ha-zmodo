@@ -34,8 +34,9 @@ _MAGIC_BYTES = struct.pack("<I", _MAGIC)
 
 OP_LOGIN = 0x9009
 OP_GET_KEY = 0x9636
-OP_START_SD = 0x9002   # 640x480
-OP_START_HD = 0x5000   # 1920x1080
+OP_START_SD = 0x9002       # 640x480 mainstream
+OP_START_SD_SUB = 0x90a2   # 640x480 substream (runs concurrently with HD mainstream)
+OP_START_HD = 0x5000       # 1920x1080 mainstream
 
 # Firmware-embedded credentials (identical on every unit of this generation).
 _USER = b"ZMDNVRLOGIN"
@@ -100,7 +101,7 @@ async def _handshake(
     reader: asyncio.StreamReader,
     writer: asyncio.StreamWriter,
     aes_key: str,
-    hd: bool,
+    stream_op: int,
     timeout: float,
 ) -> str:
     """Log in, fetch the AES key if needed, and request the live stream.
@@ -122,7 +123,7 @@ async def _handshake(
             raise LocalProtocolError("camera did not return a usable AES key")
         aes_key = key
 
-    writer.write(build_frame(OP_START_HD if hd else OP_START_SD))
+    writer.write(build_frame(stream_op))
     await writer.drain()
     return aes_key
 
@@ -155,7 +156,7 @@ async def stream_local(
     host: str,
     aes_key: str = "",
     *,
-    hd: bool = True,
+    stream_op: int = OP_START_HD,
     port: int = LOCAL_STREAM_PORT,
     open_connection: Callable[..., Any] = asyncio.open_connection,
     connect_timeout: float = CONNECT_TIMEOUT,
@@ -164,18 +165,21 @@ async def stream_local(
 ) -> AsyncIterator[bytes]:
     """Connect, authenticate and yield raw media frames from a camera on the LAN.
 
-    Each yielded value is a complete ``00dc``/``01dc`` message ready for
-    :func:`.stream.parse_frame`. ``on_key`` (if given) is called with the AES
-    key once the handshake resolves it, so the caller can cache/decrypt.
+    ``stream_op`` selects the stream: :data:`OP_START_HD` (1080p mainstream),
+    :data:`OP_START_SD_SUB` (480p substream) or :data:`OP_START_SD`. HD and the
+    substream can run on two concurrent connections. Each yielded value is a
+    complete ``00dc``/``01dc`` message ready for :func:`.stream.parse_frame`.
+    ``on_key`` (if given) is called with the AES key once the handshake resolves
+    it, so the caller can cache/decrypt.
     """
     reader, writer = await asyncio.wait_for(
         open_connection(host, port), connect_timeout
     )
     try:
-        key = await _handshake(reader, writer, aes_key, hd, read_timeout)
+        key = await _handshake(reader, writer, aes_key, stream_op, read_timeout)
         if on_key is not None:
             on_key(key)
-        _LOGGER.debug("Local Zmodo stream open to %s:%d (%s)", host, port, "HD" if hd else "SD")
+        _LOGGER.debug("Local Zmodo stream open to %s:%d (op %#06x)", host, port, stream_op)
         while True:
             yield await _read_video_message(reader, read_timeout)
     finally:

@@ -259,16 +259,22 @@ class LiveHub:
         create_task=None,
         local_clock=None,
         local_host: str | None = None,
-        local_hd: bool = True,
+        local_op: int = local_stream.OP_START_HD,
+        quality: str = "sd",
+        allow_cloud: bool = True,
     ) -> None:
         self._http = session
         self._platform = platform
         self.serial = serial
         self.aes_key = aes_key
         # When set, pull video directly from the camera over the LAN (port 8000)
-        # instead of the cloud; cloud stays the automatic fallback.
+        # instead of the cloud. ``local_op`` picks the stream (HD mainstream vs
+        # SD substream); ``quality`` is the label this hub serves; ``allow_cloud``
+        # is False for HD (the cloud has no HD, so no silent drop to SD).
         self.local_host = local_host
-        self.local_hd = local_hd
+        self.local_op = local_op
+        self.quality = quality
+        self.allow_cloud = allow_cloud
         self.active_source: str | None = None  # "local" or "cloud" while streaming
         self._create_task = create_task or asyncio.get_running_loop().create_task
         # Returns local seconds since midnight (HA's time zone); for diagnostics.
@@ -421,12 +427,17 @@ class LiveHub:
             except asyncio.CancelledError:
                 raise
             except Exception as err:  # noqa: BLE001
-                if self._got_frames:
+                # Mid-stream drop, or an HD hub with no cloud equivalent:
+                # re-raise so the retry loop reconnects locally rather than
+                # silently serving SD cloud video from an "HD" entity.
+                if self._got_frames or not self.allow_cloud:
                     raise
                 _LOGGER.info(
                     "Local stream for %s unavailable (%s); falling back to cloud",
                     self.serial, err,
                 )
+        if not self.allow_cloud:
+            raise RuntimeError("no cloud source for this stream (HD is LAN-only)")
         await self._pump_cloud()
 
     async def _pump_local(self) -> None:
@@ -442,7 +453,7 @@ class LiveHub:
         frames = local_stream.stream_local(
             self.local_host,
             self.aes_key,
-            hd=self.local_hd,
+            stream_op=self.local_op,
             on_key=_remember_key,
         )
         try:
