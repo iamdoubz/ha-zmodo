@@ -4,7 +4,7 @@ The platform API authenticates with a Bearer header, which neither ffmpeg
 (via a camera's stream_source) nor the HA frontend can send. These views sit
 in between:
 
-* ``/api/zmodo/live/<entry_id>/<serial>`` — live stream, decrypted to FLV.
+* ``/api/zmodo/live/<entry_id>/<serial>`` — live stream, decrypted to MPEG-TS.
 * ``/api/zmodo/alert/<entry_id>/<alert_id>/<image|clip>`` — alert still or
   MP4 clip, proxied with Range support so the clip is seekable.
 
@@ -154,7 +154,7 @@ def _allowed(hass: HomeAssistant, request: web.Request) -> bool:
 
 
 class ZmodoLiveRelayView(HomeAssistantView):
-    """Serve a camera's live stream as FLV over HTTP."""
+    """Serve a camera's live stream as MPEG-TS over HTTP."""
 
     url = "/api/zmodo/live/{entry_id}/{serial}/{quality}"
     name = "api:zmodo:live"
@@ -182,14 +182,14 @@ class ZmodoLiveRelayView(HomeAssistantView):
         stream = hub.stream()
         async with contextlib.aclosing(stream):
             # Wait for real video before answering, so a failed camera
-            # session is a clean 503 rather than an empty/invalid FLV.
+            # session is a clean 503 rather than an empty/invalid stream.
             try:
                 first = await anext(stream)
             except (StopAsyncIteration, asyncio.TimeoutError):
                 return web.Response(status=503, text="Camera stream unavailable")
 
             response = web.StreamResponse(
-                headers={"Content-Type": "video/x-flv", "Cache-Control": "no-store"}
+                headers={"Content-Type": "video/mp2t", "Cache-Control": "no-store"}
             )
             await response.prepare(request)
             try:
