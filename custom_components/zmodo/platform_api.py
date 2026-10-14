@@ -101,8 +101,16 @@ class ZmodoPlatformApi:
         self.access_token: str | None = None
         self.refresh_token: str | None = None
         self.user_id: str | None = None
+        # The login response's access_server block — streaming session identity
+        # (token_id JWT, client_id, cid, user_conn hosts). Needed for cloud PTZ.
+        self.access_server: dict[str, Any] = {}
         self._expires_at = 0.0
         self._token_lock = asyncio.Lock()
+
+    @property
+    def session(self) -> aiohttp.ClientSession:
+        """The shared aiohttp session (used by the PTZ WebSocket client)."""
+        return self._session
 
     # -- auth ----------------------------------------------------------
 
@@ -128,7 +136,8 @@ class ZmodoPlatformApi:
             raise ZmodoPlatformAuthError(f"Login returned no access_token: {data}")
         self.access_token = token
         self.refresh_token = data.get("refresh_token")
-        self.user_id = (data.get("access_server") or {}).get("client_id")
+        self.access_server = data.get("access_server") or {}
+        self.user_id = self.access_server.get("client_id")
         self._expires_at = jwt_expiry(token) or (time.time() + 3600)
         return data
 

@@ -44,6 +44,7 @@ from .const import (
     UPDATE_INTERVAL,
 )
 from .platform_api import ZmodoPlatformApi, ZmodoPlatformAuthError, ZmodoPlatformError
+from .ptz import ZmodoPtz
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -79,6 +80,7 @@ class ZmodoCoordinator(DataUpdateCoordinator):
         self._api = api
         self.platform = platform
         self._entry = entry
+        self.ptz = ZmodoPtz(platform)
 
         # Legacy MeShare session (optional)
         self._legacy_ok = False
@@ -498,6 +500,7 @@ class ZmodoCoordinator(DataUpdateCoordinator):
                 device_online="1" if pd.get("online") else "0",
                 aes_key=pd.get("aes_key") or ld.get("aes_key", ""),
                 product_id=pd.get("product_id"),
+                device_capacities=pd.get("device_capacities"),
                 device_channel=pd.get("device_channel", ld.get("device_channel", 1)),
                 audio=pd.get("audio"),
             )

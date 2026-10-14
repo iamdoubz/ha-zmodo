@@ -80,6 +80,7 @@ For each camera discovered on your account, the following entities are created:
 | `select.<name>_frame_rate` | Select | Select device video frame rate |
 | `select.<name>_night_vision_mode` | Select | Select device nightvision mode |
 | `select.<name>_night_vision_sensitivity` | Select | Select device nightvision sensitivity |
+| `button.<name>_pan_up` / `_down` / `_left` / `_right` | Button | PTZ pan/tilt — each press nudges the camera (PTZ cameras only) |
 
 ---
 
@@ -120,9 +121,10 @@ contribute support.
 - **Cloud for everything but local video**: Account login, device discovery,
   settings and alerts all pass through Zmodo/MeShare servers. Live video can run
   locally (see above); nothing else does.
-- **PTZ**: Pan/tilt commands travel over a certificate-pinned cloud/P2P command
-  channel and cannot be driven over the LAN, so they aren't controllable via this
-  integration.
+- **PTZ is cloud-only**: Pan/tilt runs over Zmodo's cloud command channel (there
+  is no LAN path for it), so the `button.<name>_pan_*` controls need the camera
+  and your account online. Each press nudges the camera briefly then stops;
+  there is no continuous hold or absolute positioning.
 - **Token refresh**: The session token expires every ~24 minutes. The integration refreshes it proactively every 20 minutes using the `login_cert` obtained at login — identical to the mobile app behaviour.
 
 ---
