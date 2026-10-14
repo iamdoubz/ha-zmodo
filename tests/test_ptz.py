@@ -48,8 +48,22 @@ class _FakePlatform:
         return "tok"
 
 
+def _check_supports_ptz(ptz) -> None:
+    sp = ptz.supports_ptz
+    assert sp({}) is False, "default-deny when no capability info"
+    assert sp({"platform_device_type": 1}) is False, "device_type 1 is never PTZ"
+    assert sp({"platform_device_type": 2}) is True, "device_type 2 is PTZ"
+    assert sp({"platform_device_type": 7}) is True
+    assert sp({"platform_device_type": 14}) is True
+    assert sp({"platform_device_type": 99}) is False, "unknown type, no 2a token"
+    assert sp({"platform_device_type": 99, "device_capacities": "x:2a:y"}) is True
+    assert sp({"platform_device_type": 1, "device_capacities": "2a"}) is False, "type 1 overrides"
+    print("supports_ptz OK: device_type {2,7,14} or '2a' token; type 1 denied")
+
+
 async def _main():
     ptz = _load_ptz()
+    _check_supports_ptz(ptz)
     received: list[dict] = []
 
     async def ws_handler(request):

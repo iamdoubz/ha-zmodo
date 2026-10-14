@@ -32,33 +32,34 @@ WS_PATH = "ws"
 PTZ_CONFIG_CMD = 0x1000009          # "cmd" field for a PTZ-config message
 CLIENT_TYPE = 1                     # Login client_type (app constant)
 CLIENT_VERSION = "8.1.0"            # Login client_version (app constant)
-DEFAULT_HOLD = 0.6                  # seconds a button press pans before auto-stop
+DEFAULT_STEP_MS = 100               # ms a button press pans before auto-stop
+MIN_STEP_MS = 20
+MAX_STEP_MS = 2000
 
 # on-screen direction -> ptz_cmd int (from the app's PtzControls button defs)
 PTZ_DIRECTIONS = {"left": 1, "right": 2, "up": 3, "down": 4, "stop": 0}
 
+# device_type values that have pan/tilt, straight from the app's readDevicePtz
+# (pan = device_type in {2,7,14}, OR device_capacities contains the "2a" token;
+#  device_type 1 is never PTZ).
+_PTZ_DEVICE_TYPES = {2, 7, 14}
+
 
 def supports_ptz(device: dict[str, Any]) -> bool:
-    """Best-effort: does this camera have motorised pan/tilt?
+    """Does this camera have motorised pan/tilt? Mirrors the app's readDevicePtz.
 
-    Shows the buttons by default — hiding a genuinely PTZ camera is worse than
-    the reverse, and the SD-H2001 test cameras expose no obvious flag. When
-    ``device_capacities`` is present but has no pan/tilt marker we recognise, the
-    payload is logged so the gate can be tightened once a confirmed non-PTZ
-    device's capacities is known.
-    # ponytail: make this strict (return the token match) when that sample exists.
+    Default-deny: unknown/ordinary cameras get no PTZ buttons. Uses the platform
+    device's ``device_type`` and ``device_capacities``.
     """
+    try:
+        dt = int(device.get("platform_device_type"))
+    except (TypeError, ValueError):
+        dt = -1
+    if dt == 1:
+        return False
     cap = device.get("device_capacities")
-    if cap in (None, "", [], {}):
-        return True
-    text = cap.lower() if isinstance(cap, str) else json.dumps(cap).lower()
-    if any(k in text for k in ("ptz", "pan", "tilt", '"pt"')):
-        return True
-    _LOGGER.debug(
-        "PTZ capability unknown for %s; device_capacities=%r — showing buttons anyway",
-        device.get("serial") or device.get("physical_id"), cap,
-    )
-    return True
+    parts = cap.lower().split(":") if isinstance(cap, str) else []
+    return dt in _PTZ_DEVICE_TYPES or "2a" in parts
 
 
 class ZmodoPtz:
@@ -72,7 +73,7 @@ class ZmodoPtz:
         # one in-flight nudge per camera; serialises press/stop pairs
         return self._locks.setdefault(serial, asyncio.Lock())
 
-    async def nudge(self, serial: str, direction: str, hold: float = DEFAULT_HOLD) -> None:
+    async def nudge(self, serial: str, direction: str, hold: float = DEFAULT_STEP_MS / 1000) -> None:
         """Pan ``direction`` for ``hold`` seconds, then stop."""
         cmd = PTZ_DIRECTIONS.get(direction)
         if cmd is None:

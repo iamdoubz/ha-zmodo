@@ -4,7 +4,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from homeassistant.components.number import NumberEntity, NumberMode
+from homeassistant.components.number import NumberEntity, NumberMode, RestoreNumber
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
@@ -14,6 +14,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
 from .coordinator import ZmodoCoordinator
+from .ptz import DEFAULT_STEP_MS, MAX_STEP_MS, MIN_STEP_MS, supports_ptz
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -23,16 +24,15 @@ async def async_setup_entry(
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    """Set up one volume number entity per device."""
+    """Set up a volume number per device, plus a PTZ step number per PTZ camera."""
     coordinator: ZmodoCoordinator = hass.data[DOMAIN][entry.entry_id]
 
-    async_add_entities(
-        [
-            ZmodoVolumeNumber(coordinator, device)
-            for device in coordinator.data["devices"].values()
-        ],
-        update_before_add=True,
-    )
+    devices = coordinator.data["devices"].values()
+    entities: list[NumberEntity] = [ZmodoVolumeNumber(coordinator, d) for d in devices]
+    entities += [
+        ZmodoPtzStepNumber(coordinator, d) for d in devices if supports_ptz(d)
+    ]
+    async_add_entities(entities, update_before_add=True)
 
 
 class ZmodoVolumeNumber(CoordinatorEntity, NumberEntity):
@@ -91,3 +91,49 @@ class ZmodoVolumeNumber(CoordinatorEntity, NumberEntity):
         await self.coordinator.async_set_device_volume(
             self._physical_id, int(value)
         )
+
+
+class ZmodoPtzStepNumber(CoordinatorEntity, RestoreNumber):
+    """How long (ms) each PTZ button press pans before auto-stopping.
+
+    Kept client-side (the move/stop timing is driven by HA, not the camera), so
+    the value lives on the coordinator where the pan buttons read it, and is
+    restored across restarts by RestoreNumber.
+    """
+
+    _attr_has_entity_name = True
+    _attr_name = "Pan step"
+    _attr_icon = "mdi:timer-cog-outline"
+    _attr_entity_category = EntityCategory.CONFIG
+    _attr_native_min_value = float(MIN_STEP_MS)
+    _attr_native_max_value = float(MAX_STEP_MS)
+    _attr_native_step = 10.0
+    _attr_mode = NumberMode.BOX
+    _attr_native_unit_of_measurement = "ms"
+
+    def __init__(self, coordinator: ZmodoCoordinator, device: dict[str, Any]) -> None:
+        super().__init__(coordinator)
+        self._serial: str = device["physical_id"]
+        self._attr_unique_id = f"zmodo_ptz_step_{self._serial}"
+        self._value = float(DEFAULT_STEP_MS)
+        coordinator.ptz_step_ms.setdefault(self._serial, DEFAULT_STEP_MS)
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        return DeviceInfo(identifiers={(DOMAIN, self._serial)})
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        last = await self.async_get_last_number_data()
+        if last is not None and last.native_value is not None:
+            self._value = float(last.native_value)
+        self.coordinator.ptz_step_ms[self._serial] = int(self._value)
+
+    @property
+    def native_value(self) -> float:
+        return self._value
+
+    async def async_set_native_value(self, value: float) -> None:
+        self._value = float(value)
+        self.coordinator.ptz_step_ms[self._serial] = int(value)
+        self.async_write_ha_state()

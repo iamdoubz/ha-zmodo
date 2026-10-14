@@ -19,7 +19,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
 from .coordinator import ZmodoCoordinator
-from .ptz import supports_ptz
+from .ptz import DEFAULT_STEP_MS, supports_ptz
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -77,8 +77,11 @@ class ZmodoPtzButton(CoordinatorEntity, ButtonEntity):
         return super().available and dev.get("device_online") == "1"
 
     async def async_press(self) -> None:
+        step_ms = self.coordinator.ptz_step_ms.get(self._serial, DEFAULT_STEP_MS)
         try:
-            await self.coordinator.ptz.nudge(self._serial, self._direction)
+            await self.coordinator.ptz.nudge(
+                self._serial, self._direction, hold=step_ms / 1000
+            )
         except Exception as err:  # noqa: BLE001
             raise HomeAssistantError(
                 f"Zmodo PTZ {self._direction} failed: {err}"

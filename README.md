@@ -12,7 +12,7 @@
 
 A Home Assistant custom integration for **Zmodo / MeShare** cloud cameras.
 
-> **Note:** This integration uses Zmodo's cloud. Since October 2026 the camera list, motion alerts and live video come from the new **user.zmodo.com** platform; camera settings (microphone, volume, frame rate, night vision, notifications) and the device picture still use the older MeShare app API and become unavailable whenever that API is down. Alert image/clip URLs are Home Assistant paths (e.g. `/api/zmodo/alert/<entry>/<alert>/clip`) that require HA authentication, so they work directly in companion-app notifications. Account login, device discovery, settings and alerts all require the Zmodo/MeShare cloud — local-only setups are not supported. **Live video**, however, can optionally be pulled **directly from a camera on your LAN** (~1 s latency instead of ~30 s, and HD-capable) — see [Local (LAN) streaming](#-local-lan-streaming-).
+> **Note:** This integration uses Zmodo's cloud. Since October 2026 the camera list, motion alerts and live video come from the new **user.zmodo.com** platform; camera settings (microphone, volume, frame rate, night vision, notifications) and the device picture still use the older MeShare app API and become unavailable whenever that API is down. PTZ pan/tilt uses a third path — Zmodo's cloud command channel (the same session the app uses). Alert image/clip URLs are Home Assistant paths (e.g. `/api/zmodo/alert/<entry>/<alert>/clip`) that require HA authentication, so they work directly in companion-app notifications. Account login, device discovery, settings and alerts all require the Zmodo/MeShare cloud — local-only setups are not supported. **Live video**, however, can optionally be pulled **directly from a camera on your LAN** (~1 s latency instead of ~30 s, and HD-capable) — see [Local (LAN) streaming](#-local-lan-streaming-).
 
 [![Open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=iamdoubz&repository=ha-zmodo&category=Integration)
 
@@ -27,6 +27,7 @@ A Home Assistant custom integration for **Zmodo / MeShare** cloud cameras.
 - 🔊 **Volume slider** — increase and decrease device volume levels
 - 🎙️ **Microphone switch** — turn your device's microphone on or off
 - 🌙👁️ **Nightvision** — configure on/off/auto with sensitivity settings low/normal/high
+- 🕹️ **PTZ pan/tilt** — on cameras that support it, pan/tilt buttons with an adjustable per-press step
 - 🔃 **Automatic re-authentication** — renews the platform token before it expires and recovers the legacy session on its own (no captcha, no re-entering credentials)
 - 🔌 **Config flow** — set up from the HA UI with just your email and password
 
@@ -81,6 +82,7 @@ For each camera discovered on your account, the following entities are created:
 | `select.<name>_night_vision_mode` | Select | Select device nightvision mode |
 | `select.<name>_night_vision_sensitivity` | Select | Select device nightvision sensitivity |
 | `button.<name>_pan_up` / `_down` / `_left` / `_right` | Button | PTZ pan/tilt — each press nudges the camera (PTZ cameras only) |
+| `number.<name>_pan_step` | Number | How long (ms) each pan press moves before auto-stopping (PTZ cameras only) |
 
 ---
 
@@ -123,8 +125,9 @@ contribute support.
   locally (see above); nothing else does.
 - **PTZ is cloud-only**: Pan/tilt runs over Zmodo's cloud command channel (there
   is no LAN path for it), so the `button.<name>_pan_*` controls need the camera
-  and your account online. Each press nudges the camera briefly then stops;
-  there is no continuous hold or absolute positioning.
+  and your account online. Each press nudges the camera for `number.<name>_pan_step`
+  milliseconds (default 100) then stops; there is no continuous hold or absolute
+  positioning. Lower the step for finer moves.
 - **Token refresh**: The session token expires every ~24 minutes. The integration refreshes it proactively every 20 minutes using the `login_cert` obtained at login — identical to the mobile app behaviour.
 
 ---
@@ -136,6 +139,8 @@ contribute support.
 | `invalid_auth` at setup | Wrong email/password | Re-enter credentials |
 | Camera shows unavailable | `device_online = 0` in the Zmodo cloud | Camera is offline |
 | Stream won't load | Token expired mid-stream | Wait for the 20-min refresh cycle, or reload HA |
+| No PTZ buttons on a camera | That model has no pan/tilt (only PTZ cameras get them) | None needed — expected |
+| PTZ press does nothing / errors | Camera or account offline | Make sure the camera is online; PTZ needs the cloud |
 
 ---
 
