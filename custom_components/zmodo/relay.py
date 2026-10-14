@@ -27,9 +27,12 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.util import dt as dt_util
 
-from .const import CONF_LOCAL_STREAMS, DOMAIN, OPT_LOCAL_HD, OPT_LOCAL_HOST
+from .const import CONF_LOCAL_STREAMS, DOMAIN, OPT_LOCAL_HOST
+from .local_stream import OP_START_HD, OP_START_SD_SUB
 from .platform_api import alert_media_path
 from .stream import LiveHub
+
+QUALITIES = ("sd", "hd")
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -56,37 +59,43 @@ def async_register_relay(hass: HomeAssistant) -> None:
     hass.data[RELAY_REGISTERED] = True
 
 
-def get_live_hub(hass: HomeAssistant, coordinator, serial: str, aes_key: str) -> LiveHub:
-    """Return the shared live hub for one camera (one Zmodo session for all viewers)."""
-    hubs: dict[tuple[str, str], LiveHub] = hass.data.setdefault(HUBS, {})
-    key = (coordinator.entry_id, serial)
+def get_live_hub(
+    hass: HomeAssistant, coordinator, serial: str, aes_key: str, quality: str = "sd"
+) -> LiveHub:
+    """Return the shared live hub for one camera+quality (one session per viewer set).
+
+    SD streams the 480p substream locally (cloud SD fallback); HD streams the
+    1080p mainstream locally only. Both can run at once on the camera.
+    """
+    hubs: dict[tuple[str, str, str], LiveHub] = hass.data.setdefault(HUBS, {})
+    key = (coordinator.entry_id, serial, quality)
     hub = hubs.get(key)
     if hub is None:
-        local_host, local_hd = _local_stream_config(hass, coordinator.entry_id, serial)
+        local_host = local_host_for(hass, coordinator.entry_id, serial)
+        hd = quality == "hd"
         hub = LiveHub(
             async_get_clientsession(hass),
             coordinator.platform,
             serial,
             aes_key,
             create_task=lambda coro: hass.async_create_background_task(
-                coro, f"zmodo live {serial}"
+                coro, f"zmodo live {serial} {quality}"
             ),
             local_clock=_local_seconds,
             local_host=local_host,
-            local_hd=local_hd,
+            local_op=OP_START_HD if hd else OP_START_SD_SUB,
+            quality=quality,
+            allow_cloud=not hd,  # the cloud has no HD stream
         )
         hubs[key] = hub
     return hub
 
 
-def _local_stream_config(
-    hass: HomeAssistant, entry_id: str, serial: str
-) -> tuple[str | None, bool]:
-    """Return (host, hd) for a camera's optional direct-LAN stream."""
+def local_host_for(hass: HomeAssistant, entry_id: str, serial: str) -> str | None:
+    """Return the configured direct-LAN host for a camera, or None."""
     entry = hass.config_entries.async_get_entry(entry_id)
     cfg = (entry.options.get(CONF_LOCAL_STREAMS, {}) if entry else {}).get(serial) or {}
-    host = (cfg.get(OPT_LOCAL_HOST) or "").strip() or None
-    return host, bool(cfg.get(OPT_LOCAL_HD, True))
+    return (cfg.get(OPT_LOCAL_HOST) or "").strip() or None
 
 
 def _local_seconds() -> float:
@@ -94,14 +103,16 @@ def _local_seconds() -> float:
     return now.hour * 3600 + now.minute * 60 + now.second + now.microsecond / 1e6
 
 
-def find_live_hub(hass: HomeAssistant, entry_id: str, serial: str) -> LiveHub | None:
-    """Return the camera's hub if one exists (no side effects)."""
-    return hass.data.get(HUBS, {}).get((entry_id, serial))
+def find_live_hub(
+    hass: HomeAssistant, entry_id: str, serial: str, quality: str = "sd"
+) -> LiveHub | None:
+    """Return the camera's hub for a quality if one exists (no side effects)."""
+    return hass.data.get(HUBS, {}).get((entry_id, serial, quality))
 
 
 async def async_stop_live_hubs(hass: HomeAssistant, entry_id: str) -> None:
     """Stop every live hub of a config entry (ends their Zmodo sessions)."""
-    hubs: dict[tuple[str, str], LiveHub] = hass.data.get(HUBS, {})
+    hubs: dict[tuple[str, str, str], LiveHub] = hass.data.get(HUBS, {})
     for key in [k for k in hubs if k[0] == entry_id]:
         await hubs.pop(key).async_stop()
 
@@ -113,11 +124,11 @@ def _loopback_base(hass: HomeAssistant) -> str:
     return f"{scheme}://127.0.0.1:{port}"
 
 
-def relay_url(hass: HomeAssistant, entry_id: str, serial: str) -> str:
+def relay_url(hass: HomeAssistant, entry_id: str, serial: str, quality: str = "sd") -> str:
     """Loopback URL of a camera's live relay (for ffmpeg/PyAV)."""
     return (
         f"{_loopback_base(hass)}/api/zmodo/live/{entry_id}/"
-        f"{quote(serial, safe='')}?key={_relay_key(hass)}"
+        f"{quote(serial, safe='')}/{quality}?key={_relay_key(hass)}"
     )
 
 
@@ -145,7 +156,7 @@ def _allowed(hass: HomeAssistant, request: web.Request) -> bool:
 class ZmodoLiveRelayView(HomeAssistantView):
     """Serve a camera's live stream as FLV over HTTP."""
 
-    url = "/api/zmodo/live/{entry_id}/{serial}"
+    url = "/api/zmodo/live/{entry_id}/{serial}/{quality}"
     name = "api:zmodo:live"
     requires_auth = False  # checked in _allowed()
 
@@ -153,10 +164,12 @@ class ZmodoLiveRelayView(HomeAssistantView):
         self.hass = hass
 
     async def get(
-        self, request: web.Request, entry_id: str, serial: str
+        self, request: web.Request, entry_id: str, serial: str, quality: str
     ) -> web.StreamResponse:
         if not _allowed(self.hass, request):
             return web.Response(status=401)
+        if quality not in QUALITIES:
+            return web.Response(status=404)
 
         coordinator = self.hass.data.get(DOMAIN, {}).get(entry_id)
         if coordinator is None or not coordinator.data:
@@ -165,7 +178,7 @@ class ZmodoLiveRelayView(HomeAssistantView):
         if device is None:
             return web.Response(status=404)
 
-        hub = get_live_hub(self.hass, coordinator, serial, device.get("aes_key", ""))
+        hub = get_live_hub(self.hass, coordinator, serial, device.get("aes_key", ""), quality)
         stream = hub.stream()
         async with contextlib.aclosing(stream):
             # Wait for real video before answering, so a failed camera

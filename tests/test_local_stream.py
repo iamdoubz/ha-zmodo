@@ -104,7 +104,7 @@ async def main() -> None:
     got_key = []
     frames = []
     gen = L.stream_local(
-        "127.0.0.1", "", hd=True, port=port, on_key=got_key.append
+        "127.0.0.1", "", stream_op=L.OP_START_HD, port=port, on_key=got_key.append
     )
     try:
         async for msg in gen:

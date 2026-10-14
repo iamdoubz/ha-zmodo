@@ -47,12 +47,12 @@ CONF_MNG_ADDRESSES = "mng_addresses"
 
 CONF_PLATFORM_USER_ID = "platform_user_id"
 
-# Per-camera local LAN streaming (options). Maps serial -> {"host": ip, "hd": bool}.
+# Per-camera local LAN streaming (options). Maps serial -> {"host": ip}.
 # When a host is set the live hub streams directly from the camera on port 8000
-# (~1 s latency, HD-capable) instead of the cloud; cloud is the auto fallback.
+# (~1 s latency) instead of the cloud, and an HD entity (1080p mainstream, local
+# only) appears alongside the SD one; the SD entity's cloud path is the fallback.
 CONF_LOCAL_STREAMS = "local_streams"
 OPT_LOCAL_HOST = "host"
-OPT_LOCAL_HD = "hd"
 
 # New platform API (user.zmodo.com)
 ALERT_FETCH_LIMIT = 100          # newest N alerts per poll; 24h count is derived from these

@@ -23,7 +23,7 @@
     "step": {
       "init": {
         "title": "Local (LAN) streaming",
-        "description": "For each camera, enter its LAN IP address to stream live video directly from the camera (~1 s latency, HD-capable) instead of via the Zmodo cloud. Leave an IP blank to keep using the cloud. The cloud is always used as an automatic fallback when the camera is off-LAN. Cameras: {cameras}",
+        "description": "For each camera, enter its LAN IP address to stream live video directly from the camera (~1 s latency) instead of via the Zmodo cloud. This also adds a local-only HD (1080p) entity for that camera alongside the SD one. Leave an IP blank to keep using the cloud (SD only). The cloud is the automatic fallback for the SD entity when the camera is off-LAN. Cameras: {cameras}",
         "data": {}
       }
     },

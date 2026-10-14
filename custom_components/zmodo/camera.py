@@ -24,6 +24,7 @@ from .relay import (
     alert_media_loopback_url,
     alert_media_relay_path,
     find_live_hub,
+    local_host_for,
     relay_url,
 )
 
@@ -45,7 +46,11 @@ async def async_setup_entry(
 
     entities: list[Camera] = []
     for device in coordinator.data["devices"].values():
-        entities.append(ZmodoCamera(coordinator, entry, device))
+        entities.append(ZmodoCamera(coordinator, entry, device, "sd"))
+        # HD exists only over the LAN (no cloud HD), so add it only when a
+        # direct-LAN host is configured for this camera.
+        if local_host_for(hass, entry.entry_id, device["physical_id"]):
+            entities.append(ZmodoCamera(coordinator, entry, device, "hd"))
         entities.append(ZmodoAlertCamera(coordinator, entry, device))
     async_add_entities(entities)
 
@@ -63,7 +68,11 @@ def _device_info(device: dict[str, Any]) -> DeviceInfo:
 
 
 class ZmodoCamera(CoordinatorEntity, Camera):
-    """Live view for one Zmodo camera (SD stream from user.zmodo.com)."""
+    """Live view for one Zmodo camera at one quality.
+
+    SD streams the 480p substream over the LAN (cloud SD fallback); HD streams
+    the 1080p mainstream over the LAN only. Both can run concurrently.
+    """
 
     _attr_has_entity_name = True
     _attr_supported_features = CameraEntityFeature.STREAM
@@ -73,14 +82,16 @@ class ZmodoCamera(CoordinatorEntity, Camera):
         coordinator: ZmodoCoordinator,
         entry: ConfigEntry,
         device: dict[str, Any],
+        quality: str = "sd",
     ) -> None:
         CoordinatorEntity.__init__(self, coordinator)
         Camera.__init__(self)
         self._entry_id = entry.entry_id
         self._initial_device = device
         self._physical_id: str = device["physical_id"]
-        # Keeps the unique_id of the old SD entity so history carries over.
-        self._attr_unique_id = f"zmodo_camera_{self._physical_id}_sd"
+        self._quality = quality
+        # The SD unique_id matches the old single entity so history carries over.
+        self._attr_unique_id = f"zmodo_camera_{self._physical_id}_{quality}"
         self._snapshot: bytes | None = None
         self._snapshot_at = 0.0
         self._snapshot_lock = asyncio.Lock()
@@ -98,7 +109,7 @@ class ZmodoCamera(CoordinatorEntity, Camera):
     @property
     def name(self) -> str:
         # has_entity_name: HA prefixes the device name ("Living Room SD")
-        return "SD"
+        return self._quality.upper()
 
     @property
     def available(self) -> bool:
@@ -115,20 +126,18 @@ class ZmodoCamera(CoordinatorEntity, Camera):
             "serial": self._physical_id,
             "platform_id": dev.get("platform_id"),
             "product_id": dev.get("product_id"),
-            "quality": "SD",
+            "quality": self._quality.upper(),
             "stream_source": None,   # "local" or "cloud" while streaming
             "viewers": 0,
             "zmodo_delay_seconds": None,
         } | self._hub_attributes()
 
     def _hub_attributes(self) -> dict[str, Any]:
-        hub = find_live_hub(self.hass, self._entry_id, self._physical_id)
+        hub = find_live_hub(self.hass, self._entry_id, self._physical_id, self._quality)
         if hub is None:
             return {}
-        # The local path can serve HD; the cloud path is SD only.
-        quality = "HD" if (hub.local_host and hub.local_hd) else "SD"
         return {
-            "quality": quality,
+            "quality": hub.quality.upper(),
             "stream_source": hub.active_source,
             "viewers": hub.client_count,
             # Camera on-screen clock vs HA clock as frames arrive from Zmodo:
@@ -139,7 +148,7 @@ class ZmodoCamera(CoordinatorEntity, Camera):
         }
 
     async def stream_source(self) -> str | None:
-        return relay_url(self.hass, self._entry_id, self._physical_id)
+        return relay_url(self.hass, self._entry_id, self._physical_id, self._quality)
 
     async def async_camera_image(
         self, width: int | None = None, height: int | None = None
@@ -150,7 +159,7 @@ class ZmodoCamera(CoordinatorEntity, Camera):
                 return self._snapshot
             image = await async_get_image(
                 self.hass,
-                relay_url(self.hass, self._entry_id, self._physical_id),
+                relay_url(self.hass, self._entry_id, self._physical_id, self._quality),
                 width=width,
                 height=height,
             )
