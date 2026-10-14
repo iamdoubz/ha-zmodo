@@ -12,7 +12,7 @@
 
 A Home Assistant custom integration for **Zmodo / MeShare** cloud cameras.
 
-> **Note:** This integration uses Zmodo's cloud. Since October 2026 the camera list, motion alerts and live video come from the new **user.zmodo.com** platform; camera settings (microphone, volume, frame rate, night vision, notifications) and the device picture still use the older MeShare app API and become unavailable whenever that API is down. Alert image/clip URLs are Home Assistant paths (e.g. `/api/zmodo/alert/<entry>/<alert>/clip`) that require HA authentication, so they work directly in companion-app notifications. Your cameras must be connected to the Zmodo/MeShare cloud — local-only setups are not supported.
+> **Note:** This integration uses Zmodo's cloud. Since October 2026 the camera list, motion alerts and live video come from the new **user.zmodo.com** platform; camera settings (microphone, volume, frame rate, night vision, notifications) and the device picture still use the older MeShare app API and become unavailable whenever that API is down. Alert image/clip URLs are Home Assistant paths (e.g. `/api/zmodo/alert/<entry>/<alert>/clip`) that require HA authentication, so they work directly in companion-app notifications. Account login, device discovery, settings and alerts all require the Zmodo/MeShare cloud — local-only setups are not supported. **Live video**, however, can optionally be pulled **directly from a camera on your LAN** (~1 s latency instead of ~30 s, and HD-capable) — see [Local (LAN) streaming](#-local-lan-streaming-).
 
 [![Open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=iamdoubz&repository=ha-zmodo&category=Integration)
 
@@ -21,6 +21,7 @@ A Home Assistant custom integration for **Zmodo / MeShare** cloud cameras.
 ## ⚡ Features ⚡
 
 - 📷 **Camera entities** — live SD stream for each device (decrypted and relayed locally by Home Assistant)
+- 🏠 **Direct LAN streaming (optional)** — stream straight from a camera on your network (~1 s latency vs ~30 s cloud), with a concurrent **HD (1080p)** entity; automatic cloud fallback when off-LAN. See [Local (LAN) streaming](#-local-lan-streaming-)
 - 🎦 **Camera frame rate** — choose from low to high frame rate to control video quality
 - 🔔 **Motion alert sensors** — last alert timestamp and 24-hour alert count per camera
 - 🔊 **Volume slider** — increase and decrease device volume levels
@@ -64,7 +65,8 @@ For each camera discovered on your account, the following entities are created:
 
 | Entity | Type | Description |
 |---|---|---|
-| `camera.<name>_sd` | Camera | Live stream (640×480) |
+| `camera.<name>_sd` | Camera | Live stream (640×480) — local substream or cloud |
+| `camera.<name>_hd` | Camera | Live stream (1920×1080), **LAN only** — appears when a local host is configured |
 | `sensor.<name>_last_alert` | Timestamp | Time of the most recent motion event |
 | `sensor.<name>_alert_count_24h` | Number | Motion alert count in the last 24 hours |
 | `image.<name>_last_alert_image` | Image | Last motion clip image thumbnail |
@@ -81,10 +83,46 @@ For each camera discovered on your account, the following entities are created:
 
 ---
 
+## 🏠 Local (LAN) streaming 🏠
+
+By default live video is relayed from the Zmodo cloud, which adds ~30 s of
+latency. If your camera and Home Assistant are on the same network, you can pull
+the stream **directly from the camera** over the LAN instead (~1 s latency), and
+unlock a concurrent **HD (1080p)** stream.
+
+**Enable it:** go to the Zmodo integration → **Configure**, and enter each
+camera's **LAN IP address**. Leave an IP blank to keep that camera on the cloud.
+
+When a camera has a LAN IP set:
+
+- its `camera.<name>_sd` entity streams the 480p substream directly (falling back
+  to the cloud automatically when the camera is off-LAN), and
+- a new `camera.<name>_hd` entity appears for the 1080p mainstream. HD exists only
+  over the LAN — the cloud has no HD stream — so it's unavailable when off-LAN.
+
+Both qualities run at once over two direct connections. The `quality` and
+`stream_source` (`local`/`cloud`) attributes on each camera show what's active.
+
+This was reverse engineered on the Ambarella S2L camera generation (model
+`SD-H2001`, `product_id` 142). Other models of the same generation often work
+with no changes — if yours doesn't stream locally, see
+[docs/PORTING_LOCAL_STREAM.md](docs/PORTING_LOCAL_STREAM.md) for how to check and
+contribute support.
+
+> ⚠️ These cameras ship with anonymous FTP and an empty-password root account.
+> Keep them on an isolated IoT VLAN with no inbound internet regardless of
+> whether you use local streaming.
+
+---
+
 ## 🗑️ Known limitations 🤦
 
-- **Cloud-only**: All data passes through Zmodo/MeShare servers. No local network access to cameras is used.
-- **PTZ**: Pan/tilt commands travel over a certificate-pinned binary protocol on Zmodo's VDR servers and cannot be controlled via this integration.
+- **Cloud for everything but local video**: Account login, device discovery,
+  settings and alerts all pass through Zmodo/MeShare servers. Live video can run
+  locally (see above); nothing else does.
+- **PTZ**: Pan/tilt commands travel over a certificate-pinned cloud/P2P command
+  channel and cannot be driven over the LAN, so they aren't controllable via this
+  integration.
 - **Token refresh**: The session token expires every ~24 minutes. The integration refreshes it proactively every 20 minutes using the `login_cert` obtained at login — identical to the mobile app behaviour.
 
 ---
@@ -102,6 +140,10 @@ For each camera discovered on your account, the following entities are created:
 ## 🧠 Contributing 🥼
 
 Pull requests welcome! Please open an issue first to discuss major changes.
+
+Adding local-stream support for another Zmodo camera model? See
+[docs/PORTING_LOCAL_STREAM.md](docs/PORTING_LOCAL_STREAM.md) and the
+`tools/probe_local_stream.py` helper.
 
 ---
 
