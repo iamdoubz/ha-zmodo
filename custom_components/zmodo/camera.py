@@ -1,6 +1,6 @@
 """Zmodo camera platform.
 
-* ``ZmodoCamera`` — live view via the local FLV relay (see relay.py).
+* ``ZmodoCamera`` — live view via the local MPEG-TS relay (see relay.py).
 * ``ZmodoAlertCamera`` — replays the latest motion alert's MP4 clip.
 """
 from __future__ import annotations

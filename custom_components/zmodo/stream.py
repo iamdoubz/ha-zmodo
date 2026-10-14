@@ -1,4 +1,4 @@
-"""Decode the user.zmodo.com live WebSocket stream and remux it to FLV.
+"""Decode the user.zmodo.com live WebSocket stream and remux it to MPEG-TS.
 
 Wire format (reverse-engineered Oct 2026):
 
@@ -134,94 +134,208 @@ def split_annexb(data: bytes) -> list[bytes]:
     return [nal for nal in nals if nal]
 
 
-FLV_FILE_HEADER = b"FLV\x01\x01\x00\x00\x00\x09" + b"\0\0\0\0"  # video only
+# ----------------------------------------------------------------------
+# MPEG-TS muxer
+#
+# We serve the live stream as MPEG-TS (not FLV) so one URL works for both
+# delivery paths: Home Assistant's HLS pipeline reads it via ffmpeg, and the
+# bundled go2rtc ingests it natively for WebRTC (go2rtc can't demux our FLV, so
+# WebRTC silently fell back to HLS — the ~2.5 s penalty). TS fixes that: LAN
+# viewers get low-latency WebRTC, remote/app viewers keep the HLS fallback.
+# ----------------------------------------------------------------------
+
+_PID_PAT = 0x0000
+_PID_PMT = 0x1000
+_PID_VIDEO = 0x0100
+_STREAM_TYPE_H264 = 0x1B
+_PROGRAM = 1
+_PTS_HZ = 90000           # TS 90 kHz clock
+_PTS_START = _PTS_HZ      # start PTS at 1 s so demuxers never see a zero/negative base
+_AUD = b"\x00\x00\x00\x01\x09\xF0"   # H.264 access-unit delimiter
 
 
-def _flv_tag(tag_type: int, ts_ms: int, body: bytes) -> bytes:
-    ts_ms &= 0xFFFFFFFF
-    head = struct.pack(
-        ">B3sBBBB3s",
-        tag_type,
-        len(body).to_bytes(3, "big"),
-        (ts_ms >> 16) & 0xFF, (ts_ms >> 8) & 0xFF, ts_ms & 0xFF,
-        (ts_ms >> 24) & 0xFF,
-        b"\0\0\0",
+def _crc32_mpeg(data: bytes) -> int:
+    """MPEG-2 CRC32 (poly 0x04C11DB7, init 0xFFFFFFFF, no reflection/xorout)."""
+    crc = 0xFFFFFFFF
+    for byte in data:
+        crc ^= byte << 24
+        for _ in range(8):
+            crc = ((crc << 1) ^ 0x04C11DB7) & 0xFFFFFFFF if crc & 0x80000000 else (crc << 1) & 0xFFFFFFFF
+    return crc
+
+
+def _psi_packet(pid: int, table_id: int, body: bytes) -> bytes:
+    """One 188-byte TS packet carrying a PSI section (PAT/PMT), CC always 0."""
+    section_length = len(body) + 4  # body + CRC32
+    section = bytes([table_id]) + struct.pack(">H", 0xB000 | section_length) + body
+    section += struct.pack(">I", _crc32_mpeg(section))
+    payload = b"\x00" + section                       # pointer_field + section
+    payload += b"\xFF" * (184 - len(payload))          # pad to a full packet
+    return bytes([0x47, 0x40 | (pid >> 8), pid & 0xFF, 0x10]) + payload  # PUSI=1, AFC=payload-only
+
+
+def _build_pat() -> bytes:
+    body = struct.pack(">H", 1)                    # transport_stream_id
+    body += bytes([0xC1, 0x00, 0x00])              # version 0, current, section 0/0
+    body += struct.pack(">H", _PROGRAM)
+    body += struct.pack(">H", 0xE000 | _PID_PMT)   # reserved + program_map_PID
+    return _psi_packet(_PID_PAT, 0x00, body)
+
+
+def _build_pmt() -> bytes:
+    body = struct.pack(">H", _PROGRAM)
+    body += bytes([0xC1, 0x00, 0x00])
+    body += struct.pack(">H", 0xE000 | _PID_VIDEO)  # PCR_PID
+    body += struct.pack(">H", 0xF000 | 0)           # program_info_length = 0
+    body += bytes([_STREAM_TYPE_H264])
+    body += struct.pack(">H", 0xE000 | _PID_VIDEO)  # elementary_PID
+    body += struct.pack(">H", 0xF000 | 0)           # ES_info_length = 0
+    return _psi_packet(_PID_PMT, 0x02, body)
+
+
+def _pcr_bytes(pts90: int) -> bytes:
+    base = pts90 & 0x1FFFFFFFF
+    return bytes([
+        (base >> 25) & 0xFF,
+        (base >> 17) & 0xFF,
+        (base >> 9) & 0xFF,
+        (base >> 1) & 0xFF,
+        ((base & 1) << 7) | 0x7E,   # reserved bits set, ext high bit 0
+        0x00,                        # ext low byte 0
+    ])
+
+
+def _pes_header(pts90: int) -> bytes:
+    pts = pts90 & 0x1FFFFFFFF
+    return (
+        b"\x00\x00\x01\xE0"          # start code + stream_id (video)
+        + b"\x00\x00"                # PES_packet_length 0 = unbounded
+        + bytes([0x80, 0x80, 5])     # marker, PTS-only flag, header len
+        + bytes([
+            0x21 | (((pts >> 30) & 0x7) << 1),
+            (pts >> 22) & 0xFF,
+            0x01 | (((pts >> 15) & 0x7F) << 1),
+            (pts >> 7) & 0xFF,
+            0x01 | ((pts & 0x7F) << 1),
+        ])
     )
-    return head + body + struct.pack(">I", 11 + len(body))
 
 
-class FlvMuxer:
-    """Video-only FLV muxer for H.264 Annex-B access units.
+class TSMuxer:
+    """Video-only MPEG-TS muxer for H.264 Annex-B access units.
 
-    Timestamps stay monotonic across upstream reconnects: call
-    ``new_source()`` before feeding frames from a new session.
+    Same interface as the old FLV muxer so the hub is container-agnostic:
+    ``new_source()`` resets per upstream session, ``mux_tags()`` returns
+    ``[(bytes, is_key)]`` chunks (the first is ``config_tag`` = PAT+PMT, which the
+    hub re-sends to mid-stream joiners), and ``file_header`` leads each client
+    (empty for TS — PAT/PMT already opens the stream).
     """
 
+    file_header = b""  # TS needs no separate file header; PAT/PMT is the start
+
     def __init__(self) -> None:
-        self.config_tag: bytes | None = None
-        self._config_body: bytes | None = None
+        self.config_tag: bytes = _build_pat() + _build_pmt()
+        self._sps: bytes | None = None
+        self._pps: bytes | None = None
+        self._cc = 0                 # video PID continuity counter
         self._t0: int | None = None
-        self._base_ms = 0
-        self._last_ms = -1
+        self._pts_base = _PTS_START
+        self._last_pts = -1
         self._need_config = True
 
     def new_source(self) -> None:
         """Prepare for frames from a new upstream session."""
         self._t0 = None
-        self._base_ms = self._last_ms + 100 if self._last_ms >= 0 else 0
+        self._pts_base = self._last_pts + _PTS_HZ // 10 if self._last_pts >= 0 else _PTS_START
         self._need_config = True
 
-    def mux_tags(self, frame: ZmodoFrame) -> list[tuple[bytes, bool]]:
-        """Return [(tag_bytes, is_keyframe_or_config)] for one frame.
+    def _build_es(self, frame: ZmodoFrame, nals: list[bytes]) -> bytes:
+        parts = [_AUD]
+        if frame.is_keyframe and self._sps and self._pps:
+            parts.append(b"\x00\x00\x00\x01" + self._sps)
+            parts.append(b"\x00\x00\x00\x01" + self._pps)
+        for nal in nals:
+            if nal[0] & 0x1F in (7, 8, 9):  # SPS/PPS re-inserted above; drop original AUDs
+                continue
+            parts.append(b"\x00\x00\x00\x01" + nal)
+        return b"".join(parts)
 
-        Nothing is emitted until the first keyframe carrying SPS/PPS; a
-        sequence-header (config) tag is emitted before the first keyframe of
-        every source.
+    def _video_packets(self, es: bytes, pts90: int, keyframe: bool) -> bytes:
+        payload = _pes_header(pts90) + es
+        out = bytearray()
+        pos, n, first = 0, len(payload), True
+        while pos < n:
+            cc = self._cc
+            self._cc = (cc + 1) & 0x0F
+            b1 = (0x40 if first else 0x00) | (_PID_VIDEO >> 8)
+            b2 = _PID_VIDEO & 0xFF
+            af = b""
+            if first:                       # PCR (and random-access flag on keyframes)
+                af = bytes([(0x40 if keyframe else 0x00) | 0x10]) + _pcr_bytes(pts90)
+            avail = 184 - (1 + len(af)) if af else 184
+            remaining = n - pos
+            if remaining >= avail:
+                chunk = payload[pos:pos + avail]
+                pos += avail
+                if af:
+                    out += bytes([0x47, b1, b2, 0x30 | cc, len(af)]) + af + chunk
+                else:
+                    out += bytes([0x47, b1, b2, 0x10 | cc]) + chunk
+            else:                            # last packet: pad with adaptation stuffing
+                chunk = payload[pos:]
+                pos = n
+                if af:
+                    af += b"\xFF" * (184 - 1 - len(af) - len(chunk))
+                    out += bytes([0x47, b1, b2, 0x30 | cc, len(af)]) + af + chunk
+                else:
+                    fill = 184 - len(chunk)        # bytes for the adaptation field
+                    af_body = b"" if fill == 1 else bytes([0x00]) + b"\xFF" * (fill - 2)
+                    out += bytes([0x47, b1, b2, 0x30 | cc, len(af_body)]) + af_body + chunk
+            first = False
+        return bytes(out)
+
+    def mux_tags(self, frame: ZmodoFrame) -> list[tuple[bytes, bool]]:
+        """Return [(chunk, is_keyframe_or_config)] for one frame.
+
+        Nothing is emitted until the first keyframe carrying SPS/PPS; PAT+PMT
+        (config_tag) is emitted before the first keyframe of every source.
         """
         if not frame.is_video:
             return []
         nals = split_annexb(frame.payload)
-        out: list[tuple[bytes, bool]] = []
+        for nal in nals:
+            t = nal[0] & 0x1F
+            if t == 7:
+                self._sps = nal
+            elif t == 8:
+                self._pps = nal
 
+        out: list[tuple[bytes, bool]] = []
         if self._t0 is None:
-            sps = next((x for x in nals if x[0] & 0x1F == 7), None)
-            pps = next((x for x in nals if x[0] & 0x1F == 8), None)
-            if not (frame.is_keyframe and sps and pps):
+            if not (frame.is_keyframe and self._sps and self._pps):
                 return out  # wait for a decodable keyframe
             self._t0 = frame.timestamp_us
-            record = (
-                bytes([1, sps[1], sps[2], sps[3], 0xFF, 0xE1])
-                + struct.pack(">H", len(sps)) + sps
-                + b"\x01" + struct.pack(">H", len(pps)) + pps
-            )
-            self._config_body = b"\x17\x00\x00\x00\x00" + record
 
-        ts_ms = self._base_ms + max(0, (frame.timestamp_us - self._t0) // 1000)
-        ts_ms = max(ts_ms, self._last_ms + 1)  # strictly increasing DTS
+        pts = self._pts_base + max(0, (frame.timestamp_us - self._t0) * 9 // 100)
+        pts = max(pts, self._last_pts + 1)  # strictly increasing
 
-        if self._need_config and self._config_body:
-            self.config_tag = _flv_tag(9, ts_ms, self._config_body)
+        if self._need_config:
             out.append((self.config_tag, True))
             self._need_config = False
 
-        body = b"".join(
-            struct.pack(">I", len(x)) + x
-            for x in nals
-            if x[0] & 0x1F not in (7, 8, 9)  # SPS/PPS live in the config record; drop AUDs
-        )
-        if not body:
+        es = self._build_es(frame, nals)
+        if es == _AUD:   # nothing but a delimiter — no slice data to send
             return out
-        kind = 0x17 if frame.is_keyframe else 0x27
-        out.append((_flv_tag(9, ts_ms, bytes([kind, 0x01, 0, 0, 0]) + body), frame.is_keyframe))
-        self._last_ms = ts_ms
+        out.append((self._video_packets(es, pts, frame.is_keyframe), frame.is_keyframe))
+        self._last_pts = pts
         return out
 
     def mux(self, frame: ZmodoFrame) -> bytes:
-        """Single-consumer helper: FLV file header + tags as one byte string."""
-        out = b"".join(tag for tag, _ in self.mux_tags(frame))
+        """Single-consumer helper: file header + chunks as one byte string."""
+        out = b"".join(chunk for chunk, _ in self.mux_tags(frame))
         if out and not getattr(self, "_sent_header", False):
             self._sent_header = True
-            out = FLV_FILE_HEADER + out
+            out = self.file_header + out
         return out
 
 
@@ -248,7 +362,7 @@ class _Subscriber:
 
 
 class LiveHub:
-    """Fan one camera's live session out to any number of FLV clients."""
+    """Fan one camera's live session out to any number of MPEG-TS clients."""
 
     def __init__(
         self,
@@ -281,7 +395,7 @@ class LiveHub:
         self._local_clock = local_clock
         self.camera_delay: float | None = None  # smoothed end-to-Zmodo delay
         self._subs: set[_Subscriber] = set()
-        self._muxer = FlvMuxer()
+        self._muxer = TSMuxer()
         self._gop: list[bytes] = []
         self._task: asyncio.Task | None = None
         self._stop_handle: asyncio.TimerHandle | None = None
@@ -294,7 +408,7 @@ class LiveHub:
     # -- client side ---------------------------------------------------
 
     async def stream(self) -> AsyncIterator[bytes]:
-        """Yield FLV bytes for one client, starting at the latest keyframe."""
+        """Yield MPEG-TS bytes for one client, starting at the latest keyframe."""
         if (
             self._failures
             and not self._gop
@@ -318,10 +432,11 @@ class LiveHub:
                 if item is None:
                     return
                 if not sub.delivered:
-                    # FLV header only once real video exists, so a relay can
-                    # still answer with an HTTP error if the camera never starts.
+                    # Container header (if any) only once real video exists, so a
+                    # relay can still answer with an HTTP error if the camera never
+                    # starts. TS has no separate header (PAT/PMT leads); FLV did.
                     sub.delivered = True
-                    item = FLV_FILE_HEADER + item
+                    item = self._muxer.file_header + item
                 yield item
         finally:
             self._subs.discard(sub)
